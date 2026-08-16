@@ -51,6 +51,9 @@ before claiming any task complete. Run them fresh.
 7. **Public repo hygiene:** no business plans, internal strategy, credentials, or
    Azure resource details in this repo. Examples use placeholder keys and
    `https://api.multiedge.ai`.
+8. **Latest supported versions.** Dependencies and the Python matrix ride the newest
+   released versions the toolchain supports; verify ceilings, never guess, and record
+   any forced pin with its reason here.
 
 ## Layout
 
