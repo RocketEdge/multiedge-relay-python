@@ -18,7 +18,7 @@ from multiedge_relay import (
     SignalAck,
 )
 
-BASE = "https://api.multiedge.com"
+BASE = "https://api.multiedge.ai"
 
 
 def make_publisher(

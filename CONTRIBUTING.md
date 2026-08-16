@@ -29,5 +29,5 @@ uv run mypy --strict src
 - Never weaken the never-silent-loss contract: no bare `except`, no swallowed
   errors, no silent cursor resets, no dropped signals.
 - Public repo: no credentials, no internal endpoints — examples use
-  `https://api.multiedge.com` and placeholder keys.
+  `https://api.multiedge.ai` and placeholder keys.
 - Update `CHANGELOG.md` in the same PR as the behavior change.

@@ -50,7 +50,7 @@ before claiming any task complete. Run them fresh.
    models; SemVer; CHANGELOG kept current.
 7. **Public repo hygiene:** no business plans, internal strategy, credentials, or
    Azure resource details in this repo. Examples use placeholder keys and
-   `https://api.multiedge.com`.
+   `https://api.multiedge.ai`.
 
 ## Layout
 

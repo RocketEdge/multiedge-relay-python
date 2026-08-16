@@ -15,7 +15,7 @@ from . import __version__
 
 USER_AGENT = f"multiedge-relay-python/{__version__}"
 
-DEFAULT_BASE_URL = "https://api.multiedge.com"
+DEFAULT_BASE_URL = "https://api.multiedge.ai"
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
 

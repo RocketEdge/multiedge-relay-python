@@ -19,7 +19,7 @@ from multiedge_relay import (
     ValidationRejected,
 )
 
-BASE = "https://api.multiedge.com"
+BASE = "https://api.multiedge.ai"
 
 
 def make_publisher(
