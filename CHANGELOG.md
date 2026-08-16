@@ -4,6 +4,22 @@ All notable changes to `multiedge-relay` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-08-16
+
+### Fixed
+
+- `verify_signature` keyed HMAC-SHA256 with the endpoint secret string's UTF-8
+  bytes, but the relay signs with the base64-DECODED 32 raw bytes (endpoint
+  secrets are delivered as base64 of 32 random bytes) — genuine deliveries failed
+  verification. The key is now the decoded bytes when the secret is valid
+  base64-of-32-bytes, with UTF-8 fallback for ad-hoc secrets (documented
+  precedence; regression-tested both ways).
+- `FileCursorStore.commit` could crash with `PermissionError` on Windows when a
+  concurrent reader briefly held the cursor file open during `os.replace`
+  (sharing violation). The replace is now retried up to 5 times with a 20 ms
+  backoff (`PermissionError` only); other `OSError`s and exhausted retries still
+  raise.
+
 ## [0.1.0] - 2026-08-16
 
 ### Added

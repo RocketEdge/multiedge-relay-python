@@ -1,7 +1,13 @@
-"""Webhook signature verification tests (HMAC-SHA256, freshness, constant time)."""
+"""Webhook signature verification tests (HMAC-SHA256, freshness, constant time).
+
+The relay delivers endpoint secrets as base64 of 32 random bytes and signs with the
+base64-DECODED raw bytes. ``sign`` below mirrors the REAL server's keying so these
+tests fail if the SDK keys on the wrong bytes.
+"""
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -13,8 +19,22 @@ import pytest
 
 from multiedge_relay import SignatureVerificationError, verify_signature
 
-SECRET = "whsec_test_secret"
+# A relay-issued secret: base64 of 32 raw bytes (fixed for determinism).
+SECRET_RAW_BYTES = bytes(range(32))
+SECRET = base64.b64encode(SECRET_RAW_BYTES).decode()
+# An ad-hoc secret that is NOT valid base64-of-32-bytes (legacy/self-managed).
+ADHOC_SECRET = "whsec_test_secret"
 NOW = datetime(2026, 8, 16, 12, 0, 0, tzinfo=UTC)
+
+
+def _server_key(secret: str) -> bytes:
+    """Key resolution exactly as the relay server does it: decoded 32 raw bytes when
+    the secret is base64-of-32, else the UTF-8 bytes of the string."""
+    try:
+        decoded = base64.b64decode(secret, validate=True)
+    except (ValueError, TypeError):
+        return secret.encode()
+    return decoded if len(decoded) == 32 else secret.encode()
 
 
 def make_body(sequence: int = 1) -> bytes:
@@ -29,9 +49,16 @@ def make_body(sequence: int = 1) -> bytes:
     ).encode()
 
 
-def sign(body: bytes, *, secret: str = SECRET, timestamp: int | None = None) -> dict[str, str]:
+def sign(
+    body: bytes,
+    *,
+    secret: str = SECRET,
+    timestamp: int | None = None,
+    key_override: bytes | None = None,
+) -> dict[str, str]:
     ts = int(NOW.timestamp()) if timestamp is None else timestamp
-    digest = hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    key = key_override if key_override is not None else _server_key(secret)
+    digest = hmac.new(key, f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
     return {
         "X-MultiEdge-Signature": f"sha256={digest}",
         "X-MultiEdge-Timestamp": str(ts),
@@ -69,6 +96,39 @@ def test_wrong_secret_rejected() -> None:
     headers = sign(body, secret="whsec_other")
     with pytest.raises(SignatureVerificationError):
         verify_signature(body, headers, SECRET, now=now)
+
+
+# --------------------------------------------------------- HMAC keying (regression)
+def test_base64_secret_verifies_against_decoded_key_signature() -> None:
+    # The real server signs with the base64-DECODED 32 raw bytes.
+    body = make_body(sequence=4)
+    headers = sign(body, key_override=SECRET_RAW_BYTES)
+    assert verify_signature(body, headers, SECRET, now=now).sequence == 4
+
+
+def test_base64_secret_rejects_signature_keyed_on_raw_base64_text() -> None:
+    # Regression: keying HMAC on the base64 STRING's UTF-8 bytes is the bug that
+    # broke live verification — such a signature must NOT verify.
+    body = make_body()
+    headers = sign(body, key_override=SECRET.encode())
+    with pytest.raises(SignatureVerificationError, match="mismatch"):
+        verify_signature(body, headers, SECRET, now=now)
+
+
+def test_adhoc_secret_falls_back_to_utf8_key() -> None:
+    # Back-compat: a secret that is not base64-of-32-bytes keys on its UTF-8 bytes.
+    body = make_body(sequence=7)
+    headers = sign(body, secret=ADHOC_SECRET, key_override=ADHOC_SECRET.encode())
+    signal = verify_signature(body, headers, ADHOC_SECRET, now=now)
+    assert signal.sequence == 7
+
+
+def test_base64_of_wrong_length_falls_back_to_utf8_key() -> None:
+    # Valid base64 but not 32 bytes decoded -> UTF-8 fallback, matching the server.
+    short_secret = base64.b64encode(b"only-16-bytes!!!").decode()
+    body = make_body()
+    headers = sign(body, secret=short_secret, key_override=short_secret.encode())
+    assert verify_signature(body, headers, short_secret, now=now).sequence == 1
 
 
 def test_stale_timestamp_rejected() -> None:

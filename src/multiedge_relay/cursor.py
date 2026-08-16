@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -44,12 +46,28 @@ class CursorStore(Protocol):
         ...
 
 
+REPLACE_ATTEMPTS = 5
+REPLACE_BACKOFF_SECONDS = 0.02
+
+
 class FileCursorStore:
     """JSON-file-per-strategy cursor store under a root directory."""
 
-    def __init__(self, root: Path | None = None) -> None:
-        """Create a store rooted at ``root`` (default ``~/.multiedge/cursor``)."""
+    def __init__(
+        self,
+        root: Path | None = None,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        """Create a store rooted at ``root`` (default ``~/.multiedge/cursor``).
+
+        Args:
+            root: Directory holding one ``<strategy>.json`` per strategy.
+            sleep: Injectable sleep used by the Windows sharing-violation retry in
+                :meth:`commit` (test seam).
+        """
         self.root = root if root is not None else Path.home() / ".multiedge" / "cursor"
+        self._sleep = sleep
 
     def path_for(self, strategy_id: str) -> Path:
         """Return the cursor file path for ``strategy_id`` (sanitized filename)."""
@@ -85,9 +103,16 @@ class FileCursorStore:
     def commit(self, strategy_id: str, sequence: int) -> None:
         """Atomically persist ``sequence`` (temp file + ``os.replace``).
 
+        On Windows, ``os.replace`` raises ``PermissionError`` while a concurrent
+        reader briefly holds the destination open (sharing violation). That is
+        transient, so it is retried up to ``REPLACE_ATTEMPTS`` times with
+        ``REPLACE_BACKOFF_SECONDS`` between attempts. Any other ``OSError`` — and
+        ``PermissionError`` persisting past the budget — propagates.
+
         Raises:
-            OSError: The underlying write or replace failed; the previous cursor
-                file (if any) is untouched.
+            OSError: The underlying write or replace failed (after retries for
+                ``PermissionError``); the previous cursor file (if any) is
+                untouched.
         """
         path = self.path_for(strategy_id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,6 +126,14 @@ class FileCursorStore:
         tmp = path.parent / f".{path.name}.{new_ulid()}.tmp"
         try:
             tmp.write_text(payload, encoding="utf-8")
-            os.replace(tmp, path)
+            for attempt in range(1, REPLACE_ATTEMPTS + 1):
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError:
+                    # Transient Windows sharing violation from a concurrent reader.
+                    if attempt == REPLACE_ATTEMPTS:
+                        raise
+                    self._sleep(REPLACE_BACKOFF_SECONDS)
         finally:
             tmp.unlink(missing_ok=True)

@@ -17,6 +17,8 @@ Contract:
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 from collections.abc import Callable, Mapping
@@ -27,6 +29,30 @@ from .models import ReceivedSignal
 
 SIGNATURE_HEADER = "X-MultiEdge-Signature"
 TIMESTAMP_HEADER = "X-MultiEdge-Timestamp"
+
+_RAW_SECRET_LENGTH = 32  # relay endpoint secrets are base64 of 32 random bytes
+
+
+def _resolve_hmac_key(secret: str) -> bytes:
+    """Resolve the HMAC key from an endpoint secret string, matching the server.
+
+    Precedence (mirrors the relay's signing side exactly):
+        1. If ``secret`` is valid standard base64 decoding to exactly 32 bytes —
+           the format the relay issues endpoint secrets in — the HMAC key is the
+           DECODED raw bytes.
+        2. Otherwise the key is the UTF-8 bytes of the string (back-compat for
+           ad-hoc/self-managed secrets).
+
+    Keying on the base64 text itself was a live bug: the server signs with the
+    decoded bytes, so genuine deliveries failed verification.
+    """
+    try:
+        decoded = base64.b64decode(secret, validate=True)
+    except (binascii.Error, ValueError):
+        return secret.encode()
+    if len(decoded) == _RAW_SECRET_LENGTH:
+        return decoded
+    return secret.encode()
 
 
 def verify_signature(
@@ -43,7 +69,11 @@ def verify_signature(
         raw_body: The request body EXACTLY as received (raw bytes — never
             re-serialized JSON; frameworks must hand over the original bytes).
         headers: Request headers; lookup is case-insensitive.
-        secret: The endpoint's shared signing secret.
+        secret: The endpoint's shared signing secret. Key precedence: if the
+            string is valid base64 of exactly 32 bytes (the format the relay
+            issues endpoint secrets in), the HMAC key is the base64-DECODED raw
+            bytes — matching the server's signing side; otherwise the UTF-8
+            bytes of the string are used (ad-hoc/self-managed secrets).
         max_age: Maximum allowed |now - timestamp| (default 5 minutes). Applies in
             both directions to also reject future-dated timestamps.
         now: Injectable clock returning an aware ``datetime`` (test seam);
@@ -86,7 +116,7 @@ def verify_signature(
         )
 
     expected = hmac.new(
-        secret.encode(), f"{timestamp}.".encode() + raw_body, hashlib.sha256
+        _resolve_hmac_key(secret), f"{timestamp}.".encode() + raw_body, hashlib.sha256
     ).hexdigest()
     if not hmac.compare_digest(expected, claimed_hex):
         raise SignatureVerificationError("signature mismatch")
