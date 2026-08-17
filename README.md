@@ -16,7 +16,8 @@ Official Python SDK for MultiEdge Signal Relay — auditable signal-distribution
 - [Webhook Verification](#webhook-verification)
 - [Error Handling — Never Silent Loss](#error-handling--never-silent-loss)
 - [Dead-Letter Queue CLI](#dead-letter-queue-cli)
-- [Cursor Semantics and Idempotency](#cursor-semantics-and-idempotency)
+- [Cursor Semantics and Idempotent-Callback Contract](#cursor-semantics-and-idempotent-callback-contract)
+- [Exactly-Once Processing (SQLite)](#exactly-once-processing-sqlite)
 - [Live Transports](#live-transports)
 - [Development](#development)
 - [License](#license)
@@ -32,6 +33,9 @@ institutional subscribers with a durable, sequenced log per strategy. This SDK g
   REST, then live via polling or Azure Web PubSub, with gap detection and back-fill.
 - **`verify_signature`** — HMAC-SHA256 webhook verification with constant-time comparison
   and replay protection.
+- **`SqliteStateStore`** — exactly-once *processing* on top of at-least-once delivery:
+  one local SQLite file (stdlib, no extra dependency) that is both the subscriber's
+  cursor store and a dedup ledger shared with webhook receivers.
 
 The relay carries signals; it does not execute trades. Every delivery is sequenced and
 auditable.
@@ -144,6 +148,54 @@ multiedge dlq purge                      # drop all pending entries (explicit da
 - A corrupt cursor file raises `CursorCorruptError` — it is **never silently reset**
   (a silent reset would replay the entire history into your callback). Inspect and fix
   with `multiedge cursor show` / `multiedge cursor reset --strategy X --to N`.
+
+## Exactly-Once Processing (SQLite)
+
+If you would rather not write the idempotency yourself, `SqliteStateStore` does it for
+you: one local SQLite file (default `~/.multiedge/state.db`, standard library only)
+records which `signal_id`s your handler has **completed**, so a redelivery — crash
+redelivery, reconnect overlap, webhook retry, operator replay — never re-invokes it.
+
+```python
+from multiedge_relay import SignalSubscriber, SqliteStateStore
+
+store = SqliteStateStore()
+subscriber = SignalSubscriber(
+    api_key="mek_your_api_key",
+    strategy_id="my-strategy",
+    on_signal=store.exactly_once(handle),   # handle completes at most once per signal
+    cursor_store=store,                     # same file doubles as the cursor store
+)
+subscriber.run()
+```
+
+The marker is committed **atomically with your handler's success**: a handler exception
+rolls it back, so the signal is retried on the next delivery. Webhook receivers use the
+same store (dedup works across channels because the key is the globally unique
+`signal_id`):
+
+```python
+with store.process(signal) as fresh:
+    if fresh:
+        ...  # side effects here — runs at most once per signal
+# answer 2xx either way so the relay's retry ladder stops
+```
+
+What "exactly once" honestly means here:
+
+- Handler runs and **local state** are exactly-once: with `store.exactly_once_tx` your
+  handler receives a `sqlite3.Cursor` bound to the marker's transaction — rows you write
+  through it commit and roll back together with the marker.
+- **External** side effects (order placement, e-mail) keep a tiny at-least-once window:
+  a crash after your handler returns but before the marker commits re-runs the handler
+  once on redelivery. No client-side scheme can close that window for effects outside
+  the database.
+- The store prunes itself (markers below the cursor watermark are deleted on every
+  cursor commit; older-than-90-days markers — the relay's replay window — are pruned on
+  open) and vacuums freed pages, so the file stays small.
+- A corrupt state file raises `StateStoreCorruptError` and is **never silently reset**
+  (that would forget what was processed and replay history into your handler).
+- Single process per state file; within the process it is thread-safe.
 
 ## Live Transports
 

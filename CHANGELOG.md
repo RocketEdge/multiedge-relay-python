@@ -4,6 +4,33 @@ All notable changes to `multiedge-relay` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-08-17
+
+### Added
+
+- `SqliteStateStore`: exactly-once *processing* on top of the relay's at-least-once
+  delivery. One local SQLite file (stdlib `sqlite3`, no new dependency) is both a
+  drop-in `CursorStore` for `SignalSubscriber` and a processed-signal ledger keyed
+  on the globally unique `signal_id`. `store.exactly_once(handler)` wraps the
+  subscriber callback (marker committed atomically with handler success; duplicates
+  skipped, cursor still advances); `store.exactly_once_tx(handler)` additionally
+  hands the handler a cursor bound to the marker transaction for truly exactly-once
+  local state; `store.process(signal)` / `store.seen(signal_id)` give webhook
+  receivers the same dedup across the retry ladder and operator replays.
+  Self-pruning (watermark prune on cursor commit, 90-day age prune matching the
+  relay's replay window) with incremental vacuum, WAL + `synchronous=FULL`
+  durability, thread-safe within one process.
+- `StateStoreCorruptError` (subclass of `CursorCorruptError`): a corrupt or
+  unknown-version state file raises loudly and is never silently reset.
+- Example `subscribe_exactly_once.py`; the FastAPI and Flask webhook examples now
+  show real dedup via `store.process(...)` instead of a placeholder comment.
+
+### Fixed
+
+- `__version__` (previously `0.1.1`) re-synced with the package version from
+  `pyproject.toml` (previously `0.2.0`) — the User-Agent header now reports the
+  true version.
+
 ## [0.2.0] - 2026-08-17
 
 ### Changed

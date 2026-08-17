@@ -12,18 +12,21 @@ import os
 
 from fastapi import FastAPI, HTTPException, Request
 
-from multiedge_relay import SignatureVerificationError, verify_signature
+from multiedge_relay import SignatureVerificationError, SqliteStateStore, verify_signature
 
 app = FastAPI()
 WEBHOOK_SECRET = os.environ.get("MULTIEDGE_WEBHOOK_SECRET", "whsec_your_endpoint_secret")
+STATE = SqliteStateStore()  # ~/.multiedge/state.db — dedups the relay's retries/replays
 
 
 @app.post("/webhooks/multiedge")
 async def receive_signal(request: Request) -> dict[str, object]:
-    """Verify and process one webhook delivery.
+    """Verify and process one webhook delivery exactly once.
 
-    Processing must be idempotent (key on ``signal.signal_id``): the relay retries
-    deliveries that do not return 2xx.
+    The relay retries deliveries that do not return 2xx (and operators can
+    replay), so the same ``signal_id`` can arrive again — the state store makes
+    the handler body run at most once per signal. Duplicates are still answered
+    2xx so the retry ladder stops.
     """
     raw_body = await request.body()
     try:
@@ -31,6 +34,7 @@ async def receive_signal(request: Request) -> dict[str, object]:
     except SignatureVerificationError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
-    # ... idempotent processing here ...
-    print(f"verified seq={signal.sequence} payload={signal.payload}")
-    return {"ok": True, "sequence": signal.sequence}
+    with STATE.process(signal) as fresh:
+        if fresh:
+            print(f"verified seq={signal.sequence} payload={signal.payload}")
+    return {"ok": True, "sequence": signal.sequence, "duplicate": not fresh}

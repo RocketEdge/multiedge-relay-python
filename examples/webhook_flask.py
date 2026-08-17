@@ -14,21 +14,25 @@ import os
 
 from flask import Flask, jsonify, request
 
-from multiedge_relay import SignatureVerificationError, verify_signature
+from multiedge_relay import SignatureVerificationError, SqliteStateStore, verify_signature
 
 app = Flask(__name__)
 WEBHOOK_SECRET = os.environ.get("MULTIEDGE_WEBHOOK_SECRET", "whsec_your_endpoint_secret")
+STATE = SqliteStateStore()  # ~/.multiedge/state.db — dedups the relay's retries/replays
 
 
 @app.post("/webhooks/multiedge")
 def receive_signal():  # type: ignore[no-untyped-def]  # Flask view
-    """Verify and process one webhook delivery (idempotently — the relay retries)."""
+    """Verify and process one webhook delivery exactly once (the relay retries)."""
     raw_body = request.get_data()  # raw bytes, exactly as received
     try:
         signal = verify_signature(raw_body, dict(request.headers), WEBHOOK_SECRET)
     except SignatureVerificationError as exc:
         return jsonify({"error": str(exc)}), 401
 
-    # ... idempotent processing here ...
-    print(f"verified seq={signal.sequence} payload={signal.payload}")
-    return jsonify({"ok": True, "sequence": signal.sequence})
+    # The relay retries non-2xx deliveries, so the same signal_id can arrive
+    # again; the body runs at most once. Duplicates are still ACKed 2xx.
+    with STATE.process(signal) as fresh:
+        if fresh:
+            print(f"verified seq={signal.sequence} payload={signal.payload}")
+    return jsonify({"ok": True, "sequence": signal.sequence, "duplicate": not fresh})

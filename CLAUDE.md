@@ -54,15 +54,32 @@ before claiming any task complete. Run them fresh.
 8. **Latest supported versions.** Dependencies and the Python matrix ride the newest
    released versions the toolchain supports; verify ceilings, never guess, and record
    any forced pin with its reason here.
+9. **Exactly-once processing store (`state_sqlite.py`).** `SqliteStateStore` is one
+   SQLite file (stdlib, WAL + `synchronous=FULL`) that is BOTH a `CursorStore` and a
+   processed-`signal_id` ledger. Invariant: a signal is processed iff
+   `sequence <= cursor[strategy]` OR `signal_id ∈ processed`; the handler only runs
+   inside the transaction that records the marker on success, so it never completes
+   twice — subscriber wrapper (`exactly_once`/`exactly_once_tx`) and webhook helper
+   (`process`/`seen`) share the ledger. Duplicate deliveries return normally (the
+   subscriber must still advance its cursor). Markers at/below the cursor watermark
+   are pruned on every commit; age-prune default 90 d = the relay replay window
+   (older deliveries cannot recur); prunes end in `incremental_vacuum` so the file
+   never balloons. A corrupt/unknown-version file raises `StateStoreCorruptError`
+   (subclass of `CursorCorruptError`, hence subscriber-fatal) — never silent reset.
+   External side effects keep a tiny at-least-once window (crash between handler
+   return and marker COMMIT) — documented honestly, never claim exactly-once
+   *delivery*.
 
 ## Layout
 
 ```text
 src/multiedge_relay/   models, envelope, ulid, exceptions, _retry, _http,
                        publisher, publisher_async, dlq, cursor, subscriber,
+                       state_sqlite (exactly-once processing store),
                        _webpubsub (extra), webhook, cli
 tests/                 fake_relay.py (in-proc FastAPI via httpx.ASGITransport) + suites;
                        markers: integration
 examples/              publish_minimal, publish_batch_with_dlq, subscribe_catchup,
-                       webhook_fastapi, webhook_flask, publish_rebalance_from_csv
+                       subscribe_exactly_once, webhook_fastapi, webhook_flask,
+                       publish_rebalance_from_csv
 ```
