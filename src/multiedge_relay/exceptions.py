@@ -98,6 +98,52 @@ class CursorCorruptError(MultiEdgeError):
     """
 
 
+class SealedError(MultiEdgeError):
+    """Base class for sealed-mode (end-to-end encryption) failures.
+
+    Sealed mode is provided by the optional ``multiedge-relay[sealed]`` extra;
+    the exception taxonomy lives in core (stdlib-only) so callers can catch it
+    without importing the crypto subpackage.
+    """
+
+
+class UnsealError(SealedError):
+    """A sealed envelope failed verification or decryption.
+
+    Raised for signature failures, AEAD authentication failures (tampering or
+    strategy/identity substitution), malformed envelopes, and algorithm
+    downgrade attempts. Treat the envelope as untrusted; never deliver its
+    contents.
+    """
+
+
+class NotARecipientError(UnsealError):
+    """None of the envelope's recipient entries match this keypair.
+
+    Most common cause: the signal was sealed before this subscriber's key was
+    registered and entitled — sealed signals published earlier can never be
+    decrypted by later-entitled subscribers (there is no re-encryption of
+    history). Verify the key registration otherwise.
+    """
+
+
+class SealedKeyError(SealedError):
+    """A key bundle is malformed, or its fingerprint does not match its ``key_id``.
+
+    The relay is untrusted for key authenticity: the SDK recomputes every
+    bundle fingerprint locally and refuses any mismatch.
+    """
+
+
+class KeyPinningError(SealedError):
+    """The fetched key set does not match the pinned fingerprints.
+
+    The message lists the unexpected and missing fingerprints. Do not publish:
+    a mismatch may mean an entitlement changed — or that the relay substituted
+    keys. Confirm fingerprints out-of-band, then update the pin set.
+    """
+
+
 class StateStoreCorruptError(CursorCorruptError):
     """The SQLite state file exists but is not a valid exactly-once state store.
 

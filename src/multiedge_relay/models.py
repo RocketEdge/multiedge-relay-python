@@ -78,6 +78,9 @@ class ReceivedSignal(BaseModel):
             strategy. Use it (or ``signal_id``) to key idempotent side effects.
         signal_id: Relay-assigned globally unique signal identifier.
         strategy_id: The strategy stream the signal belongs to.
+        client_signal_id: Echo of the publisher's idempotency key, when the relay
+            envelope carries it. Sealed mode requires it: it is an input to the
+            sealed envelope's AAD identity binding.
         published_at: Relay-side acceptance timestamp (UTC).
         payload: The publisher's opaque signal content.
     """
@@ -89,6 +92,7 @@ class ReceivedSignal(BaseModel):
     strategy_id: str
     published_at: datetime
     payload: dict[str, Any]
+    client_signal_id: str | None = None
 
 
 class SignalMeta(BaseModel):
