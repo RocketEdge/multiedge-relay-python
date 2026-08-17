@@ -44,6 +44,7 @@ class StoredSignal:
             "sequence": self.sequence,
             "signal_id": self.signal_id,
             "strategy_id": self.strategy_id,
+            "client_signal_id": self.client_signal_id,
             "published_at": self.published_at.isoformat(),
             "payload": self.payload,
         }
@@ -65,6 +66,10 @@ class FakeRelay:
     page_size_cap: int = 1000
     signals: dict[str, list[StoredSignal]] = field(default_factory=dict)
     requests: list[str] = field(default_factory=list)
+    # Sealed-mode key registry (ADR 0004): per-strategy recipient/sender bundles,
+    # stored opaquely as {"key_id": ..., "bundle": ...} — like the real relay.
+    recipient_keys: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    sender_keys: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._seq: dict[str, int] = {}
@@ -159,6 +164,31 @@ class FakeRelay:
             return JSONResponse(
                 {"url": "wss://example.invalid/client/hubs/signals?access_token=fake"}
             )
+
+        @app.get("/v1/strategies/{strategy_id}/sealed-keys")
+        async def list_recipient_keys(strategy_id: str) -> JSONResponse:
+            return JSONResponse({"keys": self.recipient_keys.get(strategy_id, [])})
+
+        @app.get("/v1/strategies/{strategy_id}/sealed-keys/sender")
+        async def get_sender_keys(strategy_id: str) -> JSONResponse:
+            return JSONResponse({"keys": self.sender_keys.get(strategy_id, [])})
+
+        @app.post("/v1/clients/{client_id}/sealed-keys")
+        async def register_recipient_key(client_id: str, request: Request) -> JSONResponse:
+            body = await request.json()
+            entry = {"key_id": body["key_id"], "client_id": client_id, "bundle": body["bundle"]}
+            # The fake has no entitlement model: register under the strategy named
+            # by the test via the client id convention "strategy:<sid>", else "any".
+            strategy_id = client_id.removeprefix("strategy:") if ":" in client_id else "any"
+            self.recipient_keys.setdefault(strategy_id, []).append(entry)
+            return JSONResponse(entry, status_code=201)
+
+        @app.put("/v1/strategies/{strategy_id}/sealed-keys/sender")
+        async def register_sender_key(strategy_id: str, request: Request) -> JSONResponse:
+            body = await request.json()
+            entry = {"key_id": body["key_id"], "strategy_id": strategy_id, "bundle": body["bundle"]}
+            self.sender_keys.setdefault(strategy_id, []).insert(0, entry)
+            return JSONResponse(entry, status_code=201)
 
         return app
 

@@ -4,10 +4,12 @@ Plan: C:\Users\jirip\.claude\plans\implement-in-multiedge-signal-distributed-pil
 Decisions locked: Ed25519+ML-DSA-65 dual signatures; sealed ⊕ compliance_profile mutually exclusive (422).
 
 ## Phase A — SDK crypto core (this repo)
-- [ ] A1 Optional extra `sealed = ["cryptography>=47"]` + dev dep; `sealed/` package skeleton with guarded import; new exceptions (SealedError, UnsealError, SealedKeyError, KeyPinningError, NotARecipientError); test_sealed_import.py
-- [ ] A2 keys.py: RecipientKeypair/SenderKeypair generate/save/load/public_bundle/fingerprint; canonical_json + bundle_fingerprint; tests
-- [ ] A3 core.py: seal()/unseal() per wire spec v1 (AAD, hybrid X25519+ML-KEM-768, HKDF transcript, dual sig, downgrade rejection); tests incl. tamper/substitution/vector fixture/hypothesis
-- [ ] A4 Sealer/Unsealer wrappers; add ReceivedSignal.client_signal_id (additive)
+- [x] A1 Optional extra `sealed = ["cryptography>=47"]` + dev dep; `sealed/` package skeleton with guarded import; new exceptions (SealedError, UnsealError, SealedKeyError, KeyPinningError, NotARecipientError); test_sealed_import.py
+- [x] A2 keys.py: RecipientKeypair/SenderKeypair generate/save/load/public_bundle/fingerprint; canonical_json + bundle_fingerprint; tests
+- [x] A3 core.py: seal()/unseal() per wire spec v1 (AAD, hybrid X25519+ML-KEM-768, HKDF transcript, dual sig, downgrade rejection); tests incl. tamper/substitution/vector fixture/hypothesis
+- [x] A4 Sealer/Unsealer wrappers; add ReceivedSignal.client_signal_id (additive)
+- [x] (user request) Python toolchain upgraded to 3.14; CI matrix + core-only leg
+      (committed a63f3c5; all five gates green)
 
 ## Phase B — C# relay (c:\src\RocketEdge.com\multiedge-signal-relay)
 - [ ] B1 StrategyEntity.Sealed + SealedKeyEntity + migration AddSealedMode; CreateStrategy sealed flag + mutual-exclusion rule
@@ -16,7 +18,8 @@ Decisions locked: Ed25519+ML-DSA-65 dual signatures; sealed ⊕ compliance_profi
 - [ ] B4 SealedKeyEndpoints (5 routes) + isolation tests
 - [ ] B5 Entitlement gate: reject field policy on sealed
 - [ ] B6 Delivery/catch-up sealed pass-through (skip FieldFilter; throw on sealed+field-policy)
-- [ ] B7 OpenAPI both copies
+- [ ] B7 OpenAPI both copies (USER REQUEST: state sealed encryption supports up to ~100
+      recipients per strategy, larger sets on the roadmap — also in website + README)
 
 ## Phase C — SDK integration (this repo)
 - [ ] C1 prepare_signal(sealer=) + publisher/async param; DLQ holds ciphertext

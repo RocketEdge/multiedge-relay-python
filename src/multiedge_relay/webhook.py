@@ -23,9 +23,13 @@ import hashlib
 import hmac
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from .exceptions import SignatureVerificationError
 from .models import ReceivedSignal
+
+if TYPE_CHECKING:  # pragma: no cover - the crypto extra is never imported at runtime here
+    from .sealed.registry import Unsealer
 
 SIGNATURE_HEADER = "X-MultiEdge-Signature"
 TIMESTAMP_HEADER = "X-MultiEdge-Timestamp"
@@ -62,6 +66,7 @@ def verify_signature(
     *,
     max_age: timedelta = timedelta(minutes=5),
     now: Callable[[], datetime] | None = None,
+    unsealer: Unsealer | None = None,
 ) -> ReceivedSignal:
     """Verify a webhook request and parse its body into a ``ReceivedSignal``.
 
@@ -78,14 +83,18 @@ def verify_signature(
             both directions to also reject future-dated timestamps.
         now: Injectable clock returning an aware ``datetime`` (test seam);
             defaults to ``datetime.now(UTC)``.
+        unsealer: Sealed-mode unsealer (``multiedge-relay[sealed]``); applied
+            AFTER HMAC verification (transport authenticity first), so the
+            returned signal carries the decrypted plaintext payload.
 
     Returns:
-        The verified, parsed signal.
+        The verified, parsed signal (plaintext when ``unsealer`` is given).
 
     Raises:
         SignatureVerificationError: Missing/malformed headers, stale or future
             timestamp, or digest mismatch. The message states the reason; treat the
             request as untrusted and do not process the body.
+        UnsealError: The sealed payload failed verification or decryption.
     """
     lowered = {k.lower(): v for k, v in headers.items()}
     signature_header = lowered.get(SIGNATURE_HEADER.lower())
@@ -121,4 +130,7 @@ def verify_signature(
     if not hmac.compare_digest(expected, claimed_hex):
         raise SignatureVerificationError("signature mismatch")
 
-    return ReceivedSignal.model_validate_json(raw_body)
+    received = ReceivedSignal.model_validate_json(raw_body)
+    if unsealer is not None:
+        received = unsealer.unseal_signal(received)
+    return received

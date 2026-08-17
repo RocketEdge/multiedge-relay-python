@@ -5,7 +5,7 @@ full contract: never-silent-loss publishing, at-least-once cursor-based subscrip
 and HMAC-verified webhooks.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from .cursor import CursorStore, FileCursorStore
 from .dlq import DiskDLQ, DLQEntry, DLQResendReport

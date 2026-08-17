@@ -24,9 +24,12 @@ import random
 import threading
 import time
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
+
+if TYPE_CHECKING:  # pragma: no cover - the crypto extra is never imported at runtime here
+    from .sealed.registry import Unsealer
 
 from ._http import DEFAULT_BASE_URL, DEFAULT_TIMEOUT_SECONDS, build_client
 from ._retry import DEFAULT_MAX_ATTEMPTS, backoff_delay, is_retryable_status
@@ -79,6 +82,7 @@ class SignalSubscriber:
         random_fn: Callable[[], float] = random.random,
         max_buffer: int = 10_000,
         gap_fill_rounds: int = 3,
+        unsealer: Unsealer | None = None,
     ) -> None:
         """Create a subscriber.
 
@@ -111,6 +115,12 @@ class SignalSubscriber:
                 ``BufferFullError`` rather than dropping parked messages.
             gap_fill_rounds: Consecutive empty REST rounds tolerated during a gap
                 fill before raising ``GapUnrecoverableError``.
+            unsealer: Sealed-mode unsealer (``multiedge-relay[sealed]``); when
+                given, every payload is verified and decrypted BEFORE the
+                callback, which then sees plaintext. An ``UnsealError`` is
+                treated like a callback failure: ``on_error`` is notified, the
+                cursor is NOT committed, and the error propagates — never
+                silent loss, never delivering unverified ciphertext.
         """
         self.strategy_id = strategy_id
         self.on_signal = on_signal
@@ -127,6 +137,7 @@ class SignalSubscriber:
         self._random_fn = random_fn
         self._max_buffer = max_buffer
         self._gap_fill_rounds = gap_fill_rounds
+        self._unsealer = unsealer
         self._client = build_client(
             api_key, base_url=base_url, timeout=timeout, transport=transport
         )
@@ -266,10 +277,14 @@ class SignalSubscriber:
             source=source,
         )
         try:
+            if self._unsealer is not None:
+                received = self._unsealer.unseal_signal(received)
             self.on_signal(received, meta)
         except Exception as exc:
             # Never silent loss: the cursor is NOT committed, so this signal is
             # redelivered on restart. Surface via on_error, then propagate.
+            # Unseal failures take the same path — ciphertext that cannot be
+            # verified is never delivered and never silently skipped.
             if self._on_error is not None:
                 self._on_error(exc)
             raise

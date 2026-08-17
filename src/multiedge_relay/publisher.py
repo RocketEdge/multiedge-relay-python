@@ -20,9 +20,12 @@ import random
 import time
 from collections.abc import Callable, Iterable
 from types import TracebackType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:  # pragma: no cover - the crypto extra is never imported at runtime here
+    from .sealed.registry import Sealer
 
 from ._http import DEFAULT_BASE_URL, DEFAULT_TIMEOUT_SECONDS, build_client
 from ._retry import DEFAULT_MAX_ATTEMPTS, backoff_delay, is_retryable_status
@@ -34,11 +37,17 @@ from .ulid import new_ulid
 _UNSET: Any = object()
 
 
-def prepare_signal(signal: Signal | dict[str, Any]) -> Signal:
-    """Coerce dict input to ``Signal`` and ensure a ULID ``client_signal_id``.
+def prepare_signal(signal: Signal | dict[str, Any], sealer: Sealer | None = None) -> Signal:
+    """Coerce dict input to ``Signal``, ensure a ULID ``client_signal_id``, seal.
+
+    Sealing happens HERE — after the idempotency ULID is assigned (the sealed
+    envelope's identity binding needs it) and before any DLQ spill (so the DLQ
+    stores ciphertext and resends are byte-identical, keeping dedup intact).
 
     Args:
         signal: A ``Signal`` or a plain dict matching its schema.
+        sealer: Optional sealed-mode sealer; when given, the returned signal's
+            payload is the sealed envelope.
 
     Returns:
         A ``Signal`` whose ``client_signal_id`` is set (auto-ULID when absent), so
@@ -48,6 +57,8 @@ def prepare_signal(signal: Signal | dict[str, Any]) -> Signal:
         signal = Signal.model_validate(signal)
     if signal.client_signal_id is None:
         signal = signal.model_copy(update={"client_signal_id": new_ulid()})
+    if sealer is not None:
+        signal = sealer.seal_signal(signal)
     return signal
 
 
@@ -103,6 +114,7 @@ class SignalPublisher:
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
         random_fn: Callable[[], float] = random.random,
+        sealer: Sealer | None = None,
     ) -> None:
         """Create a publisher.
 
@@ -116,8 +128,12 @@ class SignalPublisher:
             transport: httpx transport override (test seam).
             sleep: Injectable sleep for backoff (test seam).
             random_fn: Injectable uniform [0,1) source for jitter (test seam).
+            sealer: Sealed-mode sealer (``multiedge-relay[sealed]``); when given,
+                every payload is end-to-end encrypted before it leaves this
+                process — the relay (and its DLQ files) see only ciphertext.
         """
         self.dlq: DiskDLQ | None = DiskDLQ() if dlq is _UNSET else dlq
+        self._sealer = sealer
         self._max_attempts = max_attempts
         self._sleep = sleep
         self._random_fn = random_fn
@@ -143,7 +159,7 @@ class SignalPublisher:
                 signal was appended to the DLQ first (``dlq_path`` set) when a DLQ
                 is configured.
         """
-        prepared = prepare_signal(signal)
+        prepared = prepare_signal(signal, self._sealer)
         body = prepared.model_dump(mode="json")
         attempts = 0
         last_error = "unknown error"

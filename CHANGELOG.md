@@ -4,6 +4,53 @@ All notable changes to `multiedge-relay` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-08-17
+
+### Added
+
+- **Sealed mode — end-to-end encryption** (`pip install "multiedge-relay[sealed]"`,
+  `cryptography>=47`): publishers seal payloads client-side and subscribers unseal
+  them client-side, so the relay stores and forwards only ciphertext — *"not 'we
+  promise not to look' but 'we cannot look'"*. The scheme is post-quantum hybrid,
+  ahead of the 2030/2035 classical-crypto deprecation timelines: per-signal
+  ChaCha20-Poly1305 with a fresh 256-bit key, wrapped per recipient with
+  **X25519 + ML-KEM-768** (FIPS 203) combined through HKDF-SHA256 with full
+  transcript binding, and signed with dual **Ed25519 + ML-DSA-65** (FIPS 204)
+  signatures — verifiers reject signature-stripping downgrades. The AAD binds
+  `strategy_id` + `client_signal_id`, so an envelope replayed under another
+  strategy or publish identity fails authenticated decryption.
+- `multiedge_relay.sealed`: `RecipientKeypair` / `SenderKeypair` (JSON key files,
+  created `0600`, never overwritten), `seal` / `unseal`, `Sealer` / `Unsealer`
+  with `from_relay(...)` constructors that fetch key bundles and **recompute
+  every fingerprint locally** — the relay is untrusted for key authenticity —
+  plus optional pinning (`pinned_recipients` / `pinned_sender`) against
+  out-of-band-verified fingerprints.
+- `SignalPublisher(..., sealer=)` / `AsyncSignalPublisher(..., sealer=)`: sealing
+  happens after the idempotency ULID is assigned and before any DLQ spill, so
+  dead-letter files hold ciphertext and resends are byte-identical.
+  `SignalSubscriber(..., unsealer=)` and `verify_signature(..., unsealer=)`
+  decrypt before your callback; an unseal failure routes to `on_error` and the
+  cursor is NOT committed — never silent loss, never unverified ciphertext.
+- CLI: `multiedge sealed keygen|fingerprint|register` (lazy import; the rest of
+  the CLI works without the extra).
+- `ReceivedSignal.client_signal_id` (optional, additive): the relay envelope's
+  idempotency echo, required to reconstruct the sealed AAD.
+- New exceptions in core (stdlib-only): `SealedError`, `UnsealError`,
+  `NotARecipientError`, `SealedKeyError`, `KeyPinningError`.
+
+### Changed
+
+- Development toolchain pinned to Python 3.14 (`.python-version`); CI matrix adds
+  3.14 plus a core-only job that removes `cryptography` and proves the sealed
+  extra never became a hard dependency. Supported floor stays Python 3.11.
+
+Honest limits: sealed mode supports up to ~100 entitled recipients per strategy
+(256 KiB envelope cap; an increase is on the roadmap); subscribers entitled after
+a signal was sealed cannot decrypt history (`NotARecipientError` says exactly
+this); relay-side field redaction and the forbidden-term compliance scan are
+structurally unavailable on sealed strategies; envelope metadata (IDs, sequence,
+timestamps, size, recipient count) remains visible to the relay by design.
+
 ## [0.3.0] - 2026-08-17
 
 ### Added

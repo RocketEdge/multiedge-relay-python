@@ -17,9 +17,12 @@ import asyncio
 import random
 from collections.abc import Awaitable, Callable, Iterable
 from types import TracebackType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:  # pragma: no cover - the crypto extra is never imported at runtime here
+    from .sealed.registry import Sealer
 
 from ._http import DEFAULT_BASE_URL, DEFAULT_TIMEOUT_SECONDS, build_async_client
 from ._retry import DEFAULT_MAX_ATTEMPTS, backoff_delay, is_retryable_status
@@ -56,10 +59,12 @@ class AsyncSignalPublisher:
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         random_fn: Callable[[], float] = random.random,
+        sealer: Sealer | None = None,
     ) -> None:
         """Create an async publisher; parameters mirror ``SignalPublisher`` exactly,
         except ``sleep`` which is an awaitable-returning callable (test seam)."""
         self.dlq: DiskDLQ | None = DiskDLQ() if dlq is _UNSET else dlq
+        self._sealer = sealer
         self._max_attempts = max_attempts
         self._sleep = sleep
         self._random_fn = random_fn
@@ -75,7 +80,7 @@ class AsyncSignalPublisher:
             ValidationRejected: Invalid or oversized signal (422/413); not retried.
             PublishFailed: Retries exhausted; DLQ spill path attached when configured.
         """
-        prepared = prepare_signal(signal)
+        prepared = prepare_signal(signal, self._sealer)
         body = prepared.model_dump(mode="json")
         attempts = 0
         last_error = "unknown error"

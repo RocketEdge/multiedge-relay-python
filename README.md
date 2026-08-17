@@ -14,6 +14,7 @@ Official Python SDK for MultiEdge Signal Relay — auditable signal-distribution
 - [Quickstart: Publish](#quickstart-publish)
 - [Quickstart: Subscribe](#quickstart-subscribe)
 - [Webhook Verification](#webhook-verification)
+- [Sealed Mode — End-to-End Encryption](#sealed-mode--end-to-end-encryption)
 - [Error Handling — Never Silent Loss](#error-handling--never-silent-loss)
 - [Dead-Letter Queue CLI](#dead-letter-queue-cli)
 - [Cursor Semantics and Idempotent-Callback Contract](#cursor-semantics-and-idempotent-callback-contract)
@@ -45,6 +46,7 @@ auditable.
 ```bash
 uv add multiedge-relay          # or: pip install multiedge-relay
 uv add "multiedge-relay[webpubsub]"   # optional: Azure Web PubSub live transport
+uv add "multiedge-relay[sealed]"      # optional: sealed mode (end-to-end encryption)
 ```
 
 Requires Python 3.11+.
@@ -103,6 +105,97 @@ def handle_webhook(raw_body: bytes, headers: dict[str, str]) -> None:
 The signature is HMAC-SHA256 over `"{timestamp}." + raw_body`, sent as
 `X-MultiEdge-Signature: sha256=<hex>` with `X-MultiEdge-Timestamp` (unix seconds).
 Requests older than 5 minutes (configurable) are rejected to prevent replays.
+
+## Sealed Mode — End-to-End Encryption
+
+For strategies created with `sealed: true`, payloads are encrypted **before they
+leave your process** and decrypted only inside your subscribers' processes. The
+relay stores and forwards ciphertext and sees only envelope metadata — IDs,
+sequence numbers, timestamps, size, recipient count. Not *"we promise not to
+look"* but *"we cannot look"*.
+
+**The cryptography (post-quantum hybrid, ahead of time):**
+
+| Property | Mechanism |
+|---|---|
+| Confidentiality | Fresh 256-bit key per signal, ChaCha20-Poly1305 AEAD |
+| Key wrap (per recipient) | Hybrid **X25519 + ML-KEM-768** (FIPS 203) via HKDF-SHA256 with transcript binding — secure if *either* component holds, so quantum-capable adversaries recording traffic today still cannot read it |
+| Authenticity | Dual **Ed25519 + ML-DSA-65** (FIPS 204) publisher signatures; verifiers reject signature-stripping downgrades — the relay cannot forge signals |
+| Identity binding | The AEAD binds `strategy_id` + `client_signal_id`, so an envelope replayed under another strategy fails decryption |
+
+**Setup — subscriber (once):**
+
+```bash
+multiedge sealed keygen --kind recipient --out ~/.multiedge/keys/recipient.key.json
+multiedge sealed register --key ~/.multiedge/keys/recipient.key.json --client CLIENT_ID --api-key mek_...
+# Read the printed fingerprint to your publisher over a separate channel.
+```
+
+**Setup — publisher (once):**
+
+```bash
+multiedge sealed keygen --kind sender --out ~/.multiedge/keys/sender.key.json
+multiedge sealed register --key ~/.multiedge/keys/sender.key.json --strategy STRATEGY_ID --api-key mek_...
+```
+
+**Publish sealed:**
+
+```python
+from multiedge_relay import Signal, SignalPublisher
+from multiedge_relay.sealed import Sealer, SenderKeypair
+
+sender = SenderKeypair.load("~/.multiedge/keys/sender.key.json")
+sealer = Sealer.from_relay(
+    api_key="mek_...", strategy_id="STRATEGY_ID", sender=sender,
+    # Strongest configuration: pin the fingerprints your subscribers read to
+    # you over the phone / signed email — the relay then cannot substitute keys.
+    pinned_recipients={"<64-hex fingerprint>", ...},
+)
+with SignalPublisher(api_key="mek_...", sealer=sealer) as publisher:
+    publisher.publish(Signal(strategy_id="STRATEGY_ID", payload={"weight": 0.5}))
+```
+
+**Subscribe sealed:**
+
+```python
+from multiedge_relay import SignalSubscriber
+from multiedge_relay.sealed import RecipientKeypair, Unsealer
+
+recipient = RecipientKeypair.load("~/.multiedge/keys/recipient.key.json")
+unsealer = Unsealer.from_relay(
+    api_key="mek_...", strategy_id="STRATEGY_ID", recipient=recipient,
+    pinned_sender="<the publisher's 64-hex fingerprint>",
+)
+subscriber = SignalSubscriber(
+    api_key="mek_...", strategy_id="STRATEGY_ID",
+    on_signal=lambda s, m: print(s.payload),   # plaintext here — nowhere else
+    unsealer=unsealer,
+)
+subscriber.run()
+```
+
+Webhook receivers pass the same `unsealer` to `verify_signature(...)` — HMAC
+transport verification first, then unseal.
+
+**Trust model, honestly:**
+
+- The relay is untrusted even for key distribution: the SDK **recomputes every
+  key fingerprint locally** and rejects mismatches; pinning fingerprints
+  verified out-of-band (`display_fingerprint()` prints them in readable groups)
+  removes the relay from the trust path entirely.
+- The DLQ stores ciphertext (sealing happens before any spill), so a dead-letter
+  file on disk leaks nothing.
+- What sealed mode does **not** hide: envelope metadata (who publishes, how
+  often, how large, to how many recipients) and traffic timing.
+- Subscribers entitled *after* a signal was sealed cannot decrypt history —
+  sealed envelopes are never re-encrypted (`NotARecipientError` says exactly
+  this). Key rotation = register a new bundle, revoke the old; both stay
+  decryptable by their holders.
+- Capacity: up to ~100 entitled recipients per sealed strategy (256 KiB
+  envelope cap). An increase is on the roadmap.
+- Relay-side field redaction and the forbidden-term compliance scan require
+  plaintext and are structurally unavailable on sealed strategies — the API
+  rejects the combinations loudly.
 
 ## Error Handling — Never Silent Loss
 
