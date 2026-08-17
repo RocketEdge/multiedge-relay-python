@@ -96,3 +96,17 @@ class CursorCorruptError(MultiEdgeError):
     callback. Inspect the file, then fix it explicitly with
     ``multiedge cursor reset --strategy X --to N``.
     """
+
+
+class StateStoreCorruptError(CursorCorruptError):
+    """The SQLite state file exists but is not a valid exactly-once state store.
+
+    Raised when the file is not a SQLite database or carries an unknown schema
+    version (e.g. written by a newer SDK). Never auto-reset: silently recreating
+    the database would forget which signals were processed and replay history
+    into the handler. Inspect or move the file, then restart.
+
+    Subclasses ``CursorCorruptError`` so the subscriber treats it as fatal
+    (it is in the subscriber's non-retryable exception set) without any change
+    to the subscriber itself.
+    """

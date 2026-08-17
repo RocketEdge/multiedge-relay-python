@@ -33,3 +33,8 @@ def dlq_root(tmp_path: Path) -> Path:
 @pytest.fixture
 def cursor_root(tmp_path: Path) -> Path:
     return tmp_path / "cursor"
+
+
+@pytest.fixture
+def state_path(tmp_path: Path) -> Path:
+    return tmp_path / "state.db"
