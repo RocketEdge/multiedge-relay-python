@@ -12,28 +12,36 @@ Decisions locked: Ed25519+ML-DSA-65 dual signatures; sealed ⊕ compliance_profi
       (committed a63f3c5; all five gates green)
 
 ## Phase B — C# relay (c:\src\RocketEdge.com\multiedge-signal-relay)
-- [ ] B1 StrategyEntity.Sealed + SealedKeyEntity + migration AddSealedMode; CreateStrategy sealed flag + mutual-exclusion rule
-- [ ] B2 SealedEnvelopeValidator (Domain, structural, 256 KiB)
-- [ ] B3 Publish sealed branch (skip schema/scan)
-- [ ] B4 SealedKeyEndpoints (5 routes) + isolation tests
-- [ ] B5 Entitlement gate: reject field policy on sealed
-- [ ] B6 Delivery/catch-up sealed pass-through (skip FieldFilter; throw on sealed+field-policy)
-- [ ] B7 OpenAPI both copies (USER REQUEST: state sealed encryption supports up to ~100
-      recipients per strategy, larger sets on the roadmap — also in website + README)
+- [x] B1 StrategyEntity.Sealed + SealedKeyEntity + migration AddSealedMode; CreateStrategy sealed flag + mutual-exclusion rule
+- [x] B2 SealedEnvelopeValidator (Domain, structural, 256 KiB)
+- [x] B3 Publish sealed branch (skip schema/scan)
+- [x] B4 SealedKeyEndpoints (5 routes) + isolation tests
+- [x] B5 Entitlement gate: reject field policy on sealed
+- [x] B6 Delivery/catch-up sealed pass-through (skip FieldFilter; throw on sealed+field-policy)
+- [x] B7 OpenAPI both copies incl. ~100-recipient capacity + roadmap note (relay commit ca9cdf9)
 
 ## Phase C — SDK integration (this repo)
-- [ ] C1 prepare_signal(sealer=) + publisher/async param; DLQ holds ciphertext
-- [ ] C2 registry.py: Sealer.from_relay/Unsealer.from_relay + fingerprint recompute + pinning; register helpers; fake_relay routes
-- [ ] C3 subscriber unsealer= in _deliver; webhook verify_signature(unsealer=)
-- [ ] C4 CLI: multiedge sealed keygen|fingerprint|register
-- [ ] C5 0.4.0 release chores: version sync, CHANGELOG, README section + ToC, examples
+- [x] C1 prepare_signal(sealer=) + publisher/async param; DLQ holds ciphertext
+- [x] C2 registry.py: Sealer.from_relay/Unsealer.from_relay + fingerprint recompute + pinning; register helpers; fake_relay routes
+- [x] C3 subscriber unsealer= in _deliver; webhook verify_signature(unsealer=)
+- [x] C4 CLI: multiedge sealed keygen|fingerprint|register
+- [x] C5 0.4.0 release chores: version sync, CHANGELOG, README section + ToC, examples (commit 96744c7)
 
 ## Phase D — docs/governance/websites
-- [ ] D1 ADR 0004 sealed-mode-client-side-crypto (relay repo)
-- [ ] D2 relay repo: mvp-deltas F3, architecture.md, changes.md, CLAUDE.md + copilot sync
-- [ ] D3 python repo: CLAUDE.md + copilot sync
-- [ ] D4 website: index FAQ, pricing, product section, docs/sealed.astro; astro build green
-- [ ] D5 c:\!\products.html from live rocketedge.com/products raw HTML (Security card + sealed explainer only)
+- [x] D1 ADR 0004 sealed-mode-client-side-crypto (relay commit 27f1cea)
+- [x] D2 relay repo: mvp-deltas F3, architecture.md, changes.md, CLAUDE.md + copilot sync (27f1cea)
+- [x] D3 python repo: CLAUDE.md + copilot sync (d6682b7)
+- [x] D4 website: index FAQ, pricing, product section, docs/sealed.astro; astro build green
+      (relay commit 838ac4f; fixed agent's kem alg-id typo + wrong "policy mode roadmap" label)
+
+## Review — 2026-08-17
+
+All phases complete. Final evidence: relay 150/150 tests + format clean (commits
+ca9cdf9, 27f1cea, 838ac4f); SDK 192 passed + mypy/ruff/black clean on Python 3.14
+(commits a63f3c5, 96744c7, d6682b7). Not executed (operator actions): git push both
+repos (deploy-apps applies the AddSealedMode EF migration; deploy-website publishes
+multiedge.ai), tag v0.4.0 → PyPI, paste c:\!\products.html into WordPress.
+- [x] D5 c:\!\products.html from live rocketedge.com/products raw HTML (Security card + sealed explainer only; 31,726 bytes, verified)
 
 ## Verification gates
 - Python: uv run pytest / mypy / ruff check . / black --check .
