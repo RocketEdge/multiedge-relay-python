@@ -11,7 +11,7 @@ keep them in sync in the same commit.
 ## THE COMMANDS
 
 ```powershell
-uv sync                                   # install (Python 3.12 dev default; supports 3.11–3.13)
+uv sync                                   # install (Python 3.14 dev default; supports 3.11–3.14)
 uv run pytest -m "not integration"        # unit tests (no network)
 uv run pytest -m integration              # live tests (needs MULTIEDGE_INTEGRATION_URL + key)
 uv run ruff check .                       # lint
@@ -45,9 +45,9 @@ before claiming any task complete. Run them fresh.
 5. **Webhook verification**: HMAC-SHA256 over `"{timestamp}." + raw_body` with the
    endpoint secret, `hmac.compare_digest`, reject |now − ts| > 5 min, injectable clock.
    Verify raw received bytes — never re-serialize.
-6. **TDD**; runtime deps only `httpx` + `pydantic` (extras: `[webpubsub]`); mypy --strict;
-   Google docstrings on every public class/function; py.typed shipped; frozen pydantic v2
-   models; SemVer; CHANGELOG kept current.
+6. **TDD**; runtime deps only `httpx` + `pydantic` (extras: `[webpubsub]`, `[sealed]`);
+   mypy --strict; Google docstrings on every public class/function; py.typed shipped;
+   frozen pydantic v2 models; SemVer; CHANGELOG kept current.
 7. **Public repo hygiene:** no business plans, internal strategy, credentials, or
    Azure resource details in this repo. Examples use placeholder keys and
    `https://relay-api.multiedge.ai`.
@@ -69,17 +69,37 @@ before claiming any task complete. Run them fresh.
    External side effects keep a tiny at-least-once window (crash between handler
    return and marker COMMIT) — documented honestly, never claim exactly-once
    *delivery*.
+10. **Sealed mode (relay ADR 0004): core never imports `sealed`.** The crypto lives
+    exclusively in `multiedge_relay/sealed/` behind the `[sealed]` extra
+    (`cryptography>=47`, which ships ML-KEM-768/ML-DSA-65); the core package stays
+    importable and fully functional without it (CI has a core-only job proving it),
+    and `Sealer`/`Unsealer` reach core only via `TYPE_CHECKING` + duck-typed params.
+    The sealed envelope v1 wire format (AAD = domain‖strategy_id‖client_signal_id‖
+    sender_kid; hybrid X25519+ML-KEM-768 → HKDF-SHA256 with transcript; dual
+    Ed25519+ML-DSA-65 with strip-downgrade rejection; canonical JSON everywhere) is
+    FROZEN by the committed test vector `tests/fixtures/sealed_v1_vector.json` —
+    format changes require a new `sealed: "v2"` and a new vector, never an edit.
+    Sealing happens inside `prepare_signal` AFTER ULID assignment and BEFORE DLQ
+    spill (ciphertext at rest, byte-identical resends). Key bundles fetched from the
+    relay are ALWAYS re-fingerprinted locally; the relay is untrusted for key
+    authenticity — pinning against out-of-band fingerprints is the documented
+    strongest configuration. Never log, print, or serialize private key material.
 
 ## Layout
 
 ```text
-src/multiedge_relay/   models, envelope, ulid, exceptions, _retry, _http,
+src/multiedge_relay/   models, ulid, exceptions, _retry, _http,
                        publisher, publisher_async, dlq, cursor, subscriber,
                        state_sqlite (exactly-once processing store),
-                       _webpubsub (extra), webhook, cli
-tests/                 fake_relay.py (in-proc FastAPI via httpx.ASGITransport) + suites;
-                       markers: integration
+                       webhook, cli (Web PubSub live transport is inlined in
+                       subscriber.py behind the [webpubsub] extra)
+src/multiedge_relay/sealed/   [sealed] extra ONLY — keys.py (hybrid keypairs +
+                       fingerprints), core.py (seal/unseal, the whole crypto),
+                       registry.py (Sealer/Unsealer + from_relay + register helpers)
+tests/                 fake_relay.py (in-proc FastAPI via httpx.ASGITransport, incl.
+                       sealed-key routes) + suites; fixtures/sealed_v1_vector.json
+                       freezes the sealed wire format; markers: integration
 examples/              publish_minimal, publish_batch_with_dlq, subscribe_catchup,
                        subscribe_exactly_once, webhook_fastapi, webhook_flask,
-                       publish_rebalance_from_csv
+                       publish_rebalance_from_csv, seal_publish, unseal_subscribe
 ```
