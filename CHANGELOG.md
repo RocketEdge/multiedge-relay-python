@@ -4,6 +4,15 @@ All notable changes to `multiedge-relay` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-08-17
+
+### Changed
+
+- Default API endpoint is now `https://relay-api.multiedge.ai` (was
+  `https://api.multiedge.ai`, which was never provisioned). MultiEdge products
+  each live at `<product>-api.multiedge.ai`; `api.multiedge.ai` is reserved for
+  a future shared gateway. Explicit `base_url=` arguments are unaffected.
+
 ## [0.1.1] - 2026-08-16
 
 ### Fixed
