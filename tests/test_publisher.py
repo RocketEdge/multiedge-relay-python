@@ -18,8 +18,19 @@ from multiedge_relay import (
     SignalPublisher,
     ValidationRejected,
 )
+from multiedge_relay._retry import DEFAULT_RETRY_BUDGET_SECONDS
 
 BASE = "https://relay-api.multiedge.ai"
+
+_ACCEPTED = httpx.Response(
+    201,
+    json={
+        "signal_id": "sig_1",
+        "client_signal_id": "c",
+        "sequence": 1,
+        "accepted_at": "2026-08-16T00:00:00+00:00",
+    },
+)
 
 
 def make_publisher(
@@ -197,3 +208,119 @@ def test_publish_many_collects_failures_when_not_raising(relay: FakeRelay, dlq_r
     assert isinstance(results[0], PublishFailed)
     assert results[0].dlq_path is not None
     assert isinstance(results[1], SignalAck)
+
+
+# --------------------------------------------------------- deployment outage ride-out
+class FakeClock:
+    """Monotonic clock advanced only by the retry loop's own sleeps.
+
+    Lets a test spend a 90 s retry budget instantly and deterministically: the
+    publisher measures elapsed time through ``__call__`` and burns it through
+    ``sleep``, so budget accounting is exercised for real without any waiting.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def sleep(self, delay: float) -> None:
+        self.sleeps.append(delay)
+        self.now += delay
+
+    def __call__(self) -> float:
+        return self.now
+
+    @property
+    def elapsed(self) -> float:
+        return self.now
+
+
+@respx.mock
+def test_publish_rides_out_an_outage_longer_than_the_old_five_attempt_budget(
+    dlq_root: Path,
+) -> None:
+    # 12 x 503 is ~30 s of Container Apps revision swap; the old 5-attempt/7.5 s
+    # budget dead-lettered the signal here.
+    clock = FakeClock()
+    route = respx.post(f"{BASE}/v1/signals").mock(
+        side_effect=[httpx.Response(503)] * 12 + [_ACCEPTED],
+    )
+    publisher = SignalPublisher(
+        api_key=API_KEY,
+        dlq=DiskDLQ(root=dlq_root),
+        sleep=clock.sleep,
+        monotonic=clock,
+        random_fn=lambda: 1.0,
+    )
+    ack = publisher.publish(Signal(strategy_id="s1", payload={"k": "v"}))
+    assert ack.sequence == 1
+    assert route.call_count == 13
+    assert clock.elapsed <= DEFAULT_RETRY_BUDGET_SECONDS
+    assert list(publisher.dlq.pending()) == []  # type: ignore[union-attr]
+
+
+@respx.mock
+def test_publish_retry_delay_is_capped_so_one_sleep_never_runs_away(dlq_root: Path) -> None:
+    clock = FakeClock()
+    respx.post(f"{BASE}/v1/signals").mock(
+        side_effect=[httpx.Response(503)] * 8 + [_ACCEPTED],
+    )
+    SignalPublisher(
+        api_key=API_KEY,
+        dlq=DiskDLQ(root=dlq_root),
+        sleep=clock.sleep,
+        monotonic=clock,
+        random_fn=lambda: 1.0,
+    ).publish(Signal(strategy_id="s1", payload={}))
+    assert clock.sleeps == [0.5, 1.0, 2.0, 4.0, 8.0, 8.0, 8.0, 8.0]
+
+
+@respx.mock
+def test_publish_honours_the_servers_retry_after_hint(dlq_root: Path) -> None:
+    clock = FakeClock()
+    respx.post(f"{BASE}/v1/signals").mock(
+        side_effect=[httpx.Response(429, headers={"Retry-After": "3"}), _ACCEPTED],
+    )
+    ack = SignalPublisher(
+        api_key=API_KEY,
+        dlq=DiskDLQ(root=dlq_root),
+        sleep=clock.sleep,
+        monotonic=clock,
+        random_fn=lambda: 1.0,
+    ).publish(Signal(strategy_id="s1", payload={}))
+    assert ack.sequence == 1
+    assert clock.sleeps == [3.0]  # the server's hint, not our 0.5 s backoff
+
+
+@respx.mock
+def test_publish_spills_to_dlq_once_the_retry_budget_is_spent(dlq_root: Path) -> None:
+    clock = FakeClock()
+    route = respx.post(f"{BASE}/v1/signals").mock(return_value=httpx.Response(503))
+    publisher = SignalPublisher(
+        api_key=API_KEY,
+        dlq=DiskDLQ(root=dlq_root),
+        retry_budget_seconds=20.0,
+        sleep=clock.sleep,
+        monotonic=clock,
+        random_fn=lambda: 1.0,
+    )
+    with pytest.raises(PublishFailed) as excinfo:
+        publisher.publish(Signal(strategy_id="s1", payload={"k": "v"}))
+    # Never overshoots the budget, and never silently loses the signal.
+    assert clock.elapsed == pytest.approx(20.0)
+    assert route.call_count == excinfo.value.attempts
+    assert excinfo.value.dlq_path is not None and excinfo.value.dlq_path.exists()
+
+
+@respx.mock
+def test_publish_auth_error_still_fails_on_the_first_attempt(dlq_root: Path) -> None:
+    # The long budget must not make a terminal failure slow: 401 is never retried.
+    clock = FakeClock()
+    route = respx.post(f"{BASE}/v1/signals").mock(return_value=httpx.Response(401))
+    publisher = SignalPublisher(
+        api_key=API_KEY, dlq=DiskDLQ(root=dlq_root), sleep=clock.sleep, monotonic=clock
+    )
+    with pytest.raises(AuthError):
+        publisher.publish(Signal(strategy_id="s1", payload={}))
+    assert route.call_count == 1
+    assert clock.sleeps == []

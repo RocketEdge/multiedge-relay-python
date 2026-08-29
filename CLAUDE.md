@@ -26,8 +26,8 @@ before claiming any task complete. Run them fresh.
 ## Design contract (mirrors the relay backend — do not drift)
 
 1. **Never silent loss.** Publish failures surface explicitly: `AuthError` /
-   `ValidationRejected` (no retry), `PublishFailed` after 5 attempts (0.5·2ⁿ s + full
-   jitter) carrying `dlq_path` when spilled to the disk DLQ (`~/.multiedge/dlq/*.jsonl`).
+   `ValidationRejected` (no retry), `PublishFailed` once the retry budget is spent,
+   carrying `dlq_path` when spilled to the disk DLQ (`~/.multiedge/dlq/*.jsonl`).
    `multiedge dlq list|resend` CLI recovers. No bare `except`, no swallowed errors.
 2. **At-least-once subscriber with cursor.** `SignalSubscriber` persists the last
    processed `sequence` per strategy in `~/.multiedge/cursor/<strategy>.json`
@@ -84,6 +84,22 @@ before claiming any task complete. Run them fresh.
     relay are ALWAYS re-fingerprinted locally; the relay is untrusted for key
     authenticity — pinning against out-of-band fingerprints is the documented
     strongest configuration. Never log, print, or serialize private key material.
+11. **Retry rides out a relay deployment, and the budget is WALL CLOCK.** One
+    `RetryPolicy` (`_retry.py`) serves all three call sites — sync publisher, async
+    publisher, subscriber catch-up — because three hand-rolled copies of the loop
+    drift. Publishers retry a transient failure (408/429/5xx + `httpx.TransportError`)
+    for `retry_budget_seconds=90` by default; `max_attempts` (25) is only a safety
+    net. The bound is wall clock because the failure being ridden out — an Azure
+    Container Apps revision swap or a migration bundle — has a DURATION, not an
+    attempt count: the previous 5-attempt budget expired in ~7.5 s and dead-lettered
+    every in-flight publish through a routine deploy. Backoff is capped at 8 s per
+    sleep so a long budget never becomes one unresponsive wait, and a server
+    `Retry-After` overrides the computed backoff (clamped to 300 s and to the
+    remaining budget). `SignalSubscriber` is the mirror case: a daemon with no DLQ,
+    so its catch-up retries INDEFINITELY by default, bounded by `stop()` (sleeps are
+    sliced so stop lands within a second) and reported through `on_error` on every
+    attempt — an unbounded loop must never be a silent one. Terminal statuses stay
+    terminal: a 400 is never retried, budget or no budget.
 
 ## Layout
 

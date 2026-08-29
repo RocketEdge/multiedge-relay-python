@@ -208,9 +208,29 @@ A publish can end in exactly three ways — all of them explicit:
 | Rejected, not retryable | `AuthError` (401/403) or `ValidationRejected` (422/413) — raised immediately, never retried |
 | Retries exhausted | Signal appended to the disk DLQ, then `PublishFailed` raised carrying `dlq_path` |
 
-Retries: 5 attempts with exponential backoff (`0.5 · 2ⁿ` seconds, full jitter), only on
-408/429/5xx and transport errors. Every signal gets an auto-generated ULID
-`client_signal_id`, so retries and DLQ resends are idempotent on the relay side.
+Retries: exponential backoff (`0.5 · 2ⁿ` seconds, full jitter, capped at 8 s per sleep)
+for up to **90 seconds of wall clock**, only on 408/429/5xx and transport errors. A
+server `Retry-After` header overrides the computed backoff. Every signal gets an
+auto-generated ULID `client_signal_id`, so retries and DLQ resends are idempotent on
+the relay side.
+
+The 90 s budget exists so that a **relay deployment is invisible to your publisher**: a
+rolling revision swap answers 503 (or refuses connections) for tens of seconds, which is
+longer than any attempt-counted budget survives. Tune it per publisher:
+
+```python
+# Latency-sensitive path: fail fast to the DLQ instead of blocking.
+SignalPublisher(api_key=..., retry_budget_seconds=5.0)
+
+# Batch job that must not dead-letter: ride out a longer maintenance window.
+SignalPublisher(api_key=..., retry_budget_seconds=600.0)
+```
+
+`SignalSubscriber` is the mirror case: it is a long-running daemon with no DLQ to fall
+back on, so its REST catch-up retries a transient failure **indefinitely** with the same
+capped backoff, bounded by `stop()`. Every failed attempt is reported through `on_error`
+— wire that up, because it is how an ongoing outage becomes visible. Pass
+`max_attempts=` or `retry_budget_seconds=` to make catch-up fail fast instead.
 
 `publish_many(signals, raise_on_partial=False)` returns a list of
 `SignalAck | PublishFailed` so batch jobs can account for every signal.

@@ -5,6 +5,10 @@ truth for both agents, kept in sync in the same commit.
 
 Non-negotiables: never-silent-loss error taxonomy; at-least-once subscriber with atomic
 file cursor committed after the callback; catch-up/gap-fill ordered by relay `sequence`;
+one shared `RetryPolicy` (`_retry.py`) for all three call sites, bounded by WALL CLOCK
+(publishers: `retry_budget_seconds=90`, long enough to ride out a relay deployment;
+subscriber catch-up: unbounded, bounded by `stop()`, every attempt reported via
+`on_error`), 8 s per-sleep cap, `Retry-After` honoured, terminal statuses never retried;
 exactly-once *processing* via `SqliteStateStore` (marker committed atomically with
 handler success; watermark + `signal_id` ledger invariant; loud `StateStoreCorruptError`,
 never silent reset; never claim exactly-once *delivery*);
