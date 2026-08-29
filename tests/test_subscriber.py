@@ -14,10 +14,12 @@ from multiedge_relay import (
     CursorCorruptError,
     FileCursorStore,
     GapUnrecoverableError,
+    MultiEdgeError,
     ReceivedSignal,
     SignalMeta,
     SignalSubscriber,
 )
+from multiedge_relay._retry import DEFAULT_MAX_ATTEMPTS
 
 STRATEGY = "s1"
 
@@ -296,3 +298,73 @@ def test_webpubsub_without_extra_raises_helpful_import_error(
     subscriber = make_subscriber(relay, cursor_root, Collector(), live_transport="webpubsub")
     with pytest.raises(ImportError, match=r"multiedge-relay\[webpubsub\]"):
         subscriber.run()
+
+
+# ------------------------------------------------------- deployment outage ride-out
+def test_catch_up_survives_an_outage_longer_than_the_old_five_attempt_budget(
+    relay: FakeRelay, cursor_root: Path
+) -> None:
+    """A relay deployment must not kill a running subscriber.
+
+    12 consecutive 503s is ~30 s of a Container Apps revision swap. The old
+    5-attempt budget raised ``MultiEdgeError`` out of ``run()`` here, so every
+    deployment required an operator restart.
+    """
+    relay.seed(STRATEGY, [{"n": 1}, {"n": 2}])
+    # More failures than DEFAULT_MAX_ATTEMPTS: only an unbounded default survives.
+    outage = DEFAULT_MAX_ATTEMPTS + 15
+    relay.fail_next(outage, 503)
+    collector = Collector()
+    errors: list[Exception] = []
+    subscriber = make_subscriber(
+        relay, cursor_root, collector, start_from="earliest", on_error=errors.append
+    )
+    subscriber.catch_up_only()
+    assert collector.sequences == [1, 2]
+    # Every retry is reported, so an unbounded loop is never a silent one.
+    assert len(errors) == outage
+    assert all(isinstance(e, MultiEdgeError) for e in errors)
+
+
+def test_catch_up_retry_is_bounded_when_the_caller_asks_for_a_bound(
+    relay: FakeRelay, cursor_root: Path
+) -> None:
+    """``max_attempts`` still caps the loop for callers who want to fail fast."""
+    relay.fail_next(10, 503)
+    collector = Collector()
+    subscriber = make_subscriber(
+        relay, cursor_root, collector, start_from="earliest", max_attempts=3
+    )
+    with pytest.raises(MultiEdgeError, match="3 attempt"):
+        subscriber.catch_up_only()
+
+
+def test_catch_up_does_not_retry_a_terminal_status(relay: FakeRelay, cursor_root: Path) -> None:
+    """An unbounded budget must never turn a permanent 400 into an infinite loop."""
+    relay.fail_next(50, 400)
+    collector = Collector()
+    subscriber = make_subscriber(relay, cursor_root, collector, start_from="earliest")
+    with pytest.raises(MultiEdgeError, match="HTTP 400"):
+        subscriber.catch_up_only()
+
+
+def test_catch_up_retry_loop_stops_when_the_subscriber_is_stopped(
+    relay: FakeRelay, cursor_root: Path
+) -> None:
+    """``stop()`` breaks an indefinite retry loop — it is bounded by the caller."""
+    relay.fail_next(10_000, 503)  # an outage that never ends
+    collector = Collector()
+    subscriber: SignalSubscriber
+
+    def stop_after_three(_: Exception) -> None:
+        errors.append(_)
+        if len(errors) == 3:
+            subscriber.stop()
+
+    errors: list[Exception] = []
+    subscriber = make_subscriber(
+        relay, cursor_root, collector, start_from="earliest", on_error=stop_after_three
+    )
+    # Without a stop check inside the retry loop this call never returns.
+    assert subscriber.catch_up_only() == 0
+    assert len(errors) == 3

@@ -16,6 +16,9 @@ Contract:
       An unfillable gap raises ``GapUnrecoverableError`` — never silently skipped.
     * A corrupt cursor raises ``CursorCorruptError`` before any delivery.
     * Holes in the REST log itself are delivered as-is: REST is authoritative.
+    * A transient REST failure (relay deploying, 5xx, refused connection) is retried
+      indefinitely with capped backoff and reported through ``on_error`` — a daemon
+      with no DLQ must ride out a deployment, not exit. ``stop()`` is the bound.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ if TYPE_CHECKING:  # pragma: no cover - the crypto extra is never imported at ru
     from .sealed.registry import Unsealer
 
 from ._http import DEFAULT_BASE_URL, DEFAULT_TIMEOUT_SECONDS, build_client
-from ._retry import DEFAULT_MAX_ATTEMPTS, backoff_delay, is_retryable_status
+from ._retry import RetryPolicy, backoff_delay, is_retryable_status
 from .cursor import CursorStore, FileCursorStore
 from .exceptions import (
     AuthError,
@@ -47,6 +50,9 @@ StartFrom = int | Literal["cursor", "earliest", "latest"]
 LiveTransport = Literal["webpubsub", "poll"]
 
 _FATAL_TYPES = (AuthError, GapUnrecoverableError, BufferFullError, CursorCorruptError)
+
+_STOP_CHECK_INTERVAL_SECONDS = 1.0
+"""Longest a backoff sleep may run before the retry loop re-checks ``stop()``."""
 
 
 class SignalSubscriber:
@@ -77,9 +83,11 @@ class SignalSubscriber:
         on_error: Callable[[Exception], None] | None = None,
         transport: httpx.BaseTransport | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
-        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        max_attempts: int | None = None,
+        retry_budget_seconds: float | None = None,
         sleep: Callable[[float], None] = time.sleep,
         random_fn: Callable[[], float] = random.random,
+        monotonic: Callable[[], float] = time.monotonic,
         max_buffer: int = 10_000,
         gap_fill_rounds: int = 3,
         unsealer: Unsealer | None = None,
@@ -104,13 +112,22 @@ class SignalSubscriber:
                 uses Azure Web PubSub push (requires the ``[webpubsub]`` extra).
             poll_interval: Seconds between live polls (poll transport only).
             page_size: REST page size for catch-up and gap fill.
-            on_error: Observability hook. Called with transport errors (which are
-                then retried) and with callback errors (which are then re-raised).
+            on_error: Observability hook. Called once per failed HTTP attempt on a
+                catch-up page (which is then retried) and with callback errors
+                (which are then re-raised). Wire it up: with the default unbounded
+                retry it is the only way an ongoing relay outage is visible.
             transport: httpx transport override (test seam).
             timeout: Per-request HTTP timeout in seconds.
-            max_attempts: HTTP attempts per catch-up page request.
+            max_attempts: Cap on HTTP attempts per catch-up page request, or ``None``
+                (default) for no cap — a subscriber is a daemon that should ride out
+                a relay deployment rather than exit, and it has no DLQ to fall back
+                on. Retries are bounded by ``stop()``.
+            retry_budget_seconds: Wall-clock cap on retrying one page request, or
+                ``None`` (default) for no cap. Set both bounds to make catch-up
+                fail fast instead.
             sleep: Injectable sleep for backoff (test seam).
             random_fn: Injectable uniform [0,1) source for jitter (test seam).
+            monotonic: Injectable monotonic clock for the retry budget (test seam).
             max_buffer: Bound on the live reorder buffer; exceeding it raises
                 ``BufferFullError`` rather than dropping parked messages.
             gap_fill_rounds: Consecutive empty REST rounds tolerated during a gap
@@ -132,9 +149,10 @@ class SignalSubscriber:
         self._poll_interval = poll_interval
         self._page_size = page_size
         self._on_error = on_error
-        self._max_attempts = max_attempts
+        self._policy = RetryPolicy(max_attempts=max_attempts, budget_seconds=retry_budget_seconds)
         self._sleep = sleep
         self._random_fn = random_fn
+        self._monotonic = monotonic
         self._max_buffer = max_buffer
         self._gap_fill_rounds = gap_fill_rounds
         self._unsealer = unsealer
@@ -235,11 +253,29 @@ class SignalSubscriber:
         return delivered
 
     def _fetch_page(self, since_sequence: int) -> list[ReceivedSignal]:
-        """GET one page of signals after ``since_sequence``, with retry policy."""
+        """GET one page of signals after ``since_sequence``, with retry policy.
+
+        By default this retries a transient failure INDEFINITELY (capped backoff),
+        because a subscriber is a long-running daemon with no DLQ to fall back on:
+        a relay deployment used to raise straight out of ``run()`` and require an
+        operator restart. Every retry is reported through ``on_error``, so an
+        unbounded loop is never a silent one. Bound it with ``max_attempts`` or
+        ``retry_budget_seconds`` to get the fail-fast behaviour instead.
+
+        Returns:
+            The page's signals, or an empty list when ``stop()`` was requested while
+            retrying (the caller's loops all re-check the stop event).
+
+        Raises:
+            AuthError: 401/403 — never retried.
+            MultiEdgeError: A non-retryable status, or a bound was exhausted.
+        """
         attempts = 0
+        started = self._monotonic()
         last_error = "unknown error"
-        while attempts < self._max_attempts:
+        while not self._stop_event.is_set():
             attempts += 1
+            retry_after: str | None = None
             try:
                 response = self._client.get(
                     "/v1/signals",
@@ -250,21 +286,50 @@ class SignalSubscriber:
                     },
                 )
             except httpx.TransportError as exc:
+                # A relay mid-deployment refuses connections before it 503s.
                 last_error = f"transport error: {exc!r}"
-                if attempts < self._max_attempts:
-                    self._sleep(backoff_delay(attempts - 1, self._random_fn))
-                continue
-            if response.status_code in (401, 403):
-                raise AuthError(f"relay rejected the API key (HTTP {response.status_code})")
-            if response.status_code == 200:
-                rows = response.json().get("signals", [])
-                return [ReceivedSignal.model_validate(row) for row in rows]
-            last_error = f"HTTP {response.status_code}: {response.text[:200]}"
-            if not is_retryable_status(response.status_code):
+            else:
+                if response.status_code in (401, 403):
+                    raise AuthError(f"relay rejected the API key (HTTP {response.status_code})")
+                if response.status_code == 200:
+                    rows = response.json().get("signals", [])
+                    return [ReceivedSignal.model_validate(row) for row in rows]
+                last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                if not is_retryable_status(response.status_code):
+                    break
+                retry_after = response.headers.get("Retry-After")
+            delay = self._policy.next_delay(
+                attempts=attempts,
+                elapsed=self._monotonic() - started,
+                retry_after=retry_after,
+                random_fn=self._random_fn,
+            )
+            if self._on_error is not None:
+                self._on_error(
+                    MultiEdgeError(
+                        f"catch-up query attempt {attempts} failed: {last_error}"
+                        + ("" if delay is None else f"; retrying in {delay:.1f}s")
+                    )
+                )
+            if delay is None:
                 break
-            if attempts < self._max_attempts:
-                self._sleep(backoff_delay(attempts - 1, self._random_fn))
+            self._sleep_interruptible(delay)
+        if self._stop_event.is_set():
+            return []
         raise MultiEdgeError(f"catch-up query failed after {attempts} attempt(s): {last_error}")
+
+    def _sleep_interruptible(self, delay: float) -> None:
+        """Sleep ``delay`` seconds in slices, returning early once ``stop()`` is set.
+
+        The retry loop may be unbounded, so it must not stay deaf to ``stop()`` for a
+        whole backoff. Slicing (rather than ``Event.wait``) keeps the injected
+        ``sleep`` seam — and therefore the tests — in charge of the actual waiting.
+        """
+        remaining = delay
+        while remaining > 0.0 and not self._stop_event.is_set():
+            slice_seconds = min(remaining, _STOP_CHECK_INTERVAL_SECONDS)
+            self._sleep(slice_seconds)
+            remaining -= slice_seconds
 
     def _deliver(
         self, received: ReceivedSignal, source: Literal["catchup", "live", "gapfill"]

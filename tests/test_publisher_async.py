@@ -90,3 +90,77 @@ async def test_async_publish_many_partial(relay: FakeRelay, dlq_root: Path) -> N
         results = await publisher.publish_many(signals, raise_on_partial=False)
     assert isinstance(results[0], PublishFailed)
     assert isinstance(results[1], SignalAck)
+
+
+# --------------------------------------------------------- deployment outage ride-out
+class AsyncFakeClock:
+    """Monotonic clock advanced only by the retry loop's own awaited sleeps.
+
+    The async mirror of ``test_publisher.FakeClock``: it lets a test spend the whole
+    90 s retry budget instantly and deterministically.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    async def sleep(self, delay: float) -> None:
+        self.sleeps.append(delay)
+        self.now += delay
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@respx.mock
+async def test_async_publish_rides_out_an_outage_longer_than_the_old_budget(
+    dlq_root: Path,
+) -> None:
+    clock = AsyncFakeClock()
+    route = respx.post(f"{BASE}/v1/signals").mock(
+        side_effect=[httpx.Response(503)] * 12
+        + [
+            httpx.Response(
+                201,
+                json={
+                    "signal_id": "sig_1",
+                    "client_signal_id": "c",
+                    "sequence": 1,
+                    "accepted_at": "2026-08-16T00:00:00+00:00",
+                },
+            )
+        ],
+    )
+    publisher = AsyncSignalPublisher(
+        api_key=API_KEY,
+        dlq=DiskDLQ(root=dlq_root),
+        sleep=clock.sleep,
+        monotonic=clock,
+        random_fn=lambda: 1.0,
+    )
+    ack = await publisher.publish(Signal(strategy_id="s1", payload={"k": "v"}))
+    assert ack.sequence == 1
+    assert route.call_count == 13
+    assert clock.sleeps == [0.5, 1.0, 2.0, 4.0, 8.0, 8.0, 8.0, 8.0, 8.0, 8.0, 8.0, 8.0]
+
+
+@respx.mock
+async def test_async_publish_honours_retry_after_and_spills_when_budget_is_spent(
+    dlq_root: Path,
+) -> None:
+    clock = AsyncFakeClock()
+    respx.post(f"{BASE}/v1/signals").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "5"})
+    )
+    publisher = AsyncSignalPublisher(
+        api_key=API_KEY,
+        dlq=DiskDLQ(root=dlq_root),
+        retry_budget_seconds=20.0,
+        sleep=clock.sleep,
+        monotonic=clock,
+        random_fn=lambda: 1.0,
+    )
+    with pytest.raises(PublishFailed) as excinfo:
+        await publisher.publish(Signal(strategy_id="s1", payload={}))
+    assert clock.sleeps == [5.0, 5.0, 5.0, 5.0]  # the server's hint, four times over
+    assert excinfo.value.dlq_path is not None and excinfo.value.dlq_path.exists()

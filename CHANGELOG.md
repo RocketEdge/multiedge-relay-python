@@ -6,8 +6,42 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-29
+
+### Changed
+
+- **Retries now ride out a relay deployment.** The retry budget is wall-clock, not
+  attempt-counted: `SignalPublisher` / `AsyncSignalPublisher` keep retrying a
+  transient failure for **90 seconds** by default (new `retry_budget_seconds=`
+  parameter) instead of giving up after 5 attempts (~7.5 s worst case). A rolling
+  Azure Container Apps revision swap or a migration bundle answers 503 — or refuses
+  connections — for tens of seconds, so the old budget dead-lettered every in-flight
+  publish through a routine deployment. Classification is unchanged (408/429/5xx and
+  transport errors only), as are the DLQ spill and `PublishFailed` on exhaustion.
+- **`SignalSubscriber` no longer dies on a deployment.** REST catch-up retries a
+  transient failure indefinitely by default (`max_attempts` and
+  `retry_budget_seconds` both default to `None`), bounded by `stop()` — a daemon with
+  no DLQ must ride out an outage rather than raise `MultiEdgeError` out of `run()`
+  and require an operator restart. Every failed attempt is now reported through
+  `on_error`, so an unbounded loop is never a silent one. Terminal statuses (401/403,
+  and any non-retryable code) still raise immediately.
+- Backoff is capped at **8 seconds per sleep** (`MAX_DELAY_SECONDS`) so a long budget
+  cannot produce one enormous unresponsive wait; the subscriber slices its sleeps so
+  `stop()` is honoured within a second.
+- `DEFAULT_MAX_ATTEMPTS` raised 5 → 25. It is now a safety net; the wall-clock budget
+  is the bound that binds. `max_attempts=` still caps the loop when passed explicitly,
+  and `max_attempts` / `retry_budget_seconds` accept `None` for "no cap".
+
 ### Added
 
+- `Retry-After` is now honoured on 429 and 503 (both RFC 9110 forms: delta-seconds and
+  HTTP-date), clamped to 300 s and to the remaining budget. The server's hint wins over
+  the computed backoff; an unparseable header falls back to exponential backoff.
+- `multiedge_relay._retry.RetryPolicy`: the single retry policy consulted by the sync
+  publisher, the async publisher, and the subscriber — previously three copies of the
+  same loop that could drift.
+- `monotonic=` test seam on all three clients, so a fake clock can spend a 90 s budget
+  instantly and deterministically.
 - `examples/prod_demo/`: a two-terminal live demo of the relay — deterministic
   synthetic rebalance-feed generator, one-shot control-plane bootstrap script,
   paced idempotent producer, and a cursor-resuming polling consumer — with a full
