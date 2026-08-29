@@ -102,4 +102,11 @@ tests/                 fake_relay.py (in-proc FastAPI via httpx.ASGITransport, i
 examples/              publish_minimal, publish_batch_with_dlq, subscribe_catchup,
                        subscribe_exactly_once, webhook_fastapi, webhook_flask,
                        publish_rebalance_from_csv, seal_publish, unseal_subscribe
+examples/prod_demo/    two-terminal live demo (README § "Two-Terminal Live Demo"):
+                       generate_demo_csv (deterministic SYNTHETIC rebalance feed —
+                       never real client data in this public repo), setup_demo
+                       (control-plane bootstrap), producer_rebalance (paced,
+                       idempotent client_signal_id "<strategy_id>:<signal_date>"),
+                       consumer_rebalance (poll subscriber; state under
+                       examples/prod_demo/.demo/, never ~/.multiedge/)
 ```

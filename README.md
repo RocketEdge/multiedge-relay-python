@@ -20,6 +20,7 @@ Official Python SDK for MultiEdge Signal Relay — auditable signal-distribution
 - [Cursor Semantics and Idempotent-Callback Contract](#cursor-semantics-and-idempotent-callback-contract)
 - [Exactly-Once Processing (SQLite)](#exactly-once-processing-sqlite)
 - [Live Transports](#live-transports)
+- [Two-Terminal Live Demo (Rebalance Feed)](#two-terminal-live-demo-rebalance-feed)
 - [Development](#development)
 - [License](#license)
 
@@ -300,6 +301,116 @@ What "exactly once" honestly means here:
   catch-up after any reconnect. Ordering truth is always the relay `sequence`, never
   the transport's own IDs. If a gap cannot be filled from REST, the subscriber raises
   `GapUnrecoverableError` instead of skipping data.
+
+## Two-Terminal Live Demo (Rebalance Feed)
+
+An end-to-end, watch-it-happen test of the relay using two terminals on one
+machine: Terminal 1 runs a consumer, Terminal 2 a producer replaying a synthetic
+monthly-rebalance instruction feed — one signal per market day, `PORTFOLIO/NONE`
+days included as explicit empty heartbeats. The scripts live in
+[`examples/prod_demo/`](examples/prod_demo/):
+
+| Script | Role |
+| --- | --- |
+| `generate_demo_csv.py` | Deterministic synthetic instruction CSV (no real data) |
+| `setup_demo.py` | One-time control-plane bootstrap: strategy, client, endpoint, entitlement, keys |
+| `producer_rebalance.py` | Terminal 2 — paced publisher with idempotent `client_signal_id`s |
+| `consumer_rebalance.py` | Terminal 1 — polling subscriber with a persisted cursor |
+
+The commands below are PowerShell (Windows); on macOS/Linux replace
+`$env:NAME = "..."` with `export NAME=...`.
+
+### 1. Install
+
+```powershell
+git clone https://github.com/multiedge-ai/multiedge-relay-python
+cd multiedge-relay-python
+uv venv                                   # or: python -m venv .venv
+uv pip install .                          # or: pip install multiedge-relay
+cd examples\prod_demo
+```
+
+### 2. Generate the demo instruction feed
+
+```powershell
+python generate_demo_csv.py --seed 42 --out demo_rebalance_signals.csv
+```
+
+The file has the shape of a real model-portfolio feed —
+`SignalDate,PlannedExecutionDate,Ticker,Action,SignalPortfolioWeight,TradeWeightDelta,ImpliedPostTradeWeightAtSignalClose`
+— with an `INITIALIZE` day, month-end rebalances, an ad-hoc mid-month rebalance,
+daily `PORTFOLIO/NONE` heartbeat rows, and one asset joining the allocation
+mid-history. Same seed, same bytes, anywhere.
+
+### 3. Bootstrap the strategy and keys (once)
+
+You need a tenant **admin** API key (`mesk_...`) from your MultiEdge operator.
+Use a dedicated evaluation/test tenant — the demo writes real signals into that
+tenant's ledger.
+
+```powershell
+$env:MULTIEDGE_ADMIN_KEY = "mesk_your_tenant_admin_key"
+python setup_demo.py
+```
+
+This creates strategy `demo-rebalance` (pinned to the relay's default
+`portfolio_rebalance/1.0` schema), a demo subscriber client with a `rest_pull`
+endpoint and an active entitlement, and mints two keys. **Copy all three values
+now — the keys are shown exactly once:**
+
+```text
+strategy_id   = 01J...ULID   (slug: demo-rebalance)
+PUBLISHER  key (Terminal 2 producer): mesk_...
+SUBSCRIBER key (Terminal 1 consumer): mesk_...
+```
+
+Reruns are safe: the strategy and client are reused; keys are minted fresh
+(revoke stale ones in the portal).
+
+### 4. Terminal 1 — start the consumer
+
+```powershell
+$env:MULTIEDGE_API_KEY = "mesk_the_SUBSCRIBER_key"
+python consumer_rebalance.py --strategy-id 01J...ULID
+```
+
+It catches up on anything already published, then polls live every 2 s. Leave it
+running.
+
+### 5. Terminal 2 — start the producer
+
+```powershell
+$env:MULTIEDGE_API_KEY = "mesk_the_PUBLISHER_key"
+python producer_rebalance.py demo_rebalance_signals.csv --strategy-id 01J...ULID --pace 3 --limit 40
+```
+
+One signal date is published every 3 seconds (`--limit 40` keeps the first demo
+short; drop it for a full-history soak). Terminal 1 prints each arrival within a
+poll interval:
+
+```text
+[live] seq=12 2024-01-16 -> 2024-01-17: no action (heartbeat)
+[live] seq=13 2024-01-31 -> 2024-02-01: 8 position(s) — 4 BUY, 4 SELL
+```
+
+### 6. Prove the delivery guarantees
+
+- **Crash resume (the headline):** press Ctrl+C in Terminal 1 while the producer
+  is still publishing. Wait a few producer ticks, restart the same consumer
+  command — it resumes from its persisted cursor and delivers exactly the missed
+  signals as `[catchup]`, no loss, no duplicates.
+- **Idempotent republish:** re-run the producer command unchanged. Every ack
+  reports `(deduplicated)` — the deterministic
+  `client_signal_id = "<strategy_id>:<signal_date>"` means the relay returns the
+  original acks instead of storing copies.
+- **Reconstruction:** `python consumer_rebalance.py --strategy-id 01J...ULID
+  --catchup-only --out received.csv` rebuilds the instruction rows from the
+  relay's log (the schema carries ticker, action, and pre-trade weight; the two
+  derived delta columns are not transported).
+
+Demo state (cursor, DLQ) lives under `examples/prod_demo/.demo/`, not in
+`~/.multiedge/`. To clean up afterwards, revoke the two demo keys in the portal;
+deleting `.demo/` resets the consumer to a first run.
 
 ## Development
 

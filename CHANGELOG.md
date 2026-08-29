@@ -4,6 +4,15 @@ All notable changes to `multiedge-relay` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `examples/prod_demo/`: a two-terminal live demo of the relay — deterministic
+  synthetic rebalance-feed generator, one-shot control-plane bootstrap script,
+  paced idempotent producer, and a cursor-resuming polling consumer — with a full
+  step-by-step guide in README § "Two-Terminal Live Demo (Rebalance Feed)".
+
 ## [0.4.0] - 2026-08-17
 
 ### Added
