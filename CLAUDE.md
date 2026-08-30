@@ -23,6 +23,14 @@ uv build                                  # build sdist+wheel (hatchling)
 All gates (pytest non-integration, ruff, black --check, mypy --strict) must be green
 before claiming any task complete. Run them fresh.
 
+**Releasing is CI-only.** Bump `version` in `pyproject.toml`, date the `CHANGELOG.md`
+entry, merge to `main`, then push an annotated `vX.Y.Z` tag whose version EQUALS the
+`pyproject.toml` version (`.github/workflows/release.yml` fails its first step
+otherwise). PyPI trusted publishing (OIDC) mints the credential inside the `pypi`
+environment, which only `v*` tags may deploy to — there is NO API token anywhere, and a
+manual `twine`/`uv publish` is forbidden: it ships a release with no provenance that can
+silently diverge from what the tag built. Full procedure in `CONTRIBUTING.md`.
+
 ## Design contract (mirrors the relay backend — do not drift)
 
 1. **Never silent loss.** Publish failures surface explicitly: `AuthError` /
