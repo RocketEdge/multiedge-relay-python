@@ -43,8 +43,11 @@ from .exceptions import (
     CursorCorruptError,
     GapUnrecoverableError,
     MultiEdgeError,
+    SignatureVerificationError,
+    ValidationRejected,
 )
 from .models import ReceivedSignal, SignalMeta
+from .webhook import verify_ws_frame
 
 StartFrom = int | Literal["cursor", "earliest", "latest"]
 LiveTransport = Literal["webpubsub", "poll"]
@@ -91,6 +94,9 @@ class SignalSubscriber:
         max_buffer: int = 10_000,
         gap_fill_rounds: int = 3,
         unsealer: Unsealer | None = None,
+        endpoint_id: str | None = None,
+        endpoint_secret: str | None = None,
+        ws_client_factory: Callable[[str], Any] | None = None,
     ) -> None:
         """Create a subscriber.
 
@@ -145,7 +151,36 @@ class SignalSubscriber:
                 treated like a callback failure: ``on_error`` is notified, the
                 cursor is NOT committed, and the error propagates — never
                 silent loss, never delivering unverified ciphertext.
+            endpoint_id: REQUIRED for ``live_transport="webpubsub"``: the
+                subscriber's own websocket endpoint ULID. The relay negotiates
+                per ENDPOINT (``POST /v1/ws/negotiate {"endpoint_id": ...}``),
+                and the token auto-joins exactly that endpoint's group.
+            endpoint_secret: REQUIRED for ``live_transport="webpubsub"``: the
+                endpoint's signing secret (shown once at endpoint creation as
+                ``secret_base64``). Every push frame's HMAC is verified with it
+                BEFORE the envelope is parsed; a frame that fails verification
+                is reported through ``on_error`` and dropped — a forged frame
+                can neither be delivered nor halt the subscriber (any real gap
+                it hides is filled from REST by sequence arithmetic).
+            ws_client_factory: Test seam: builds the Web PubSub client from the
+                negotiated URL. Defaults to ``azure.messaging.webpubsubclient
+                .WebPubSubClient`` (the ``[webpubsub]`` extra).
+
+        Raises:
+            ValueError: ``live_transport="webpubsub"`` without ``endpoint_id``
+                or ``endpoint_secret``.
         """
+        if live_transport == "webpubsub":
+            if not endpoint_id:
+                raise ValueError(
+                    'live_transport="webpubsub" requires endpoint_id — the relay '
+                    'negotiates per endpoint: POST /v1/ws/negotiate {"endpoint_id": ...}'
+                )
+            if not endpoint_secret:
+                raise ValueError(
+                    'live_transport="webpubsub" requires endpoint_secret — every push '
+                    "frame is HMAC-verified with the per-endpoint secret before parsing"
+                )
         self.strategy_id = strategy_id
         self.on_signal = on_signal
         self._cursor_store: CursorStore = (
@@ -173,6 +208,15 @@ class SignalSubscriber:
         self._started = False
         # Error stashed by the Web PubSub callback thread for the main loop to raise.
         self._pending_error: Exception | None = None
+        self._endpoint_id = endpoint_id
+        self._endpoint_secret = endpoint_secret
+        self._ws_client_factory = ws_client_factory
+        # WS resume protocol step 2: frames arriving between socket-open and the
+        # end of catch-up are parked here (verified but unprocessed), then
+        # drained in arrival order. Guarded by _ws_phase_lock.
+        self._ws_phase_lock = threading.Lock()
+        self._ws_buffering = False
+        self._ws_prelive: list[ReceivedSignal] = []
 
     # ------------------------------------------------------------------ lifecycle
     def run(self) -> None:
@@ -186,7 +230,7 @@ class SignalSubscriber:
             Exception: Whatever the ``on_signal`` callback raised (after ``on_error``
                 was notified); the failing signal's cursor was NOT committed.
         """
-        if self._live_transport == "webpubsub":
+        if self._live_transport == "webpubsub" and self._ws_client_factory is None:
             self._require_webpubsub()
         self._start_position()
         self._catch_up("catchup")
@@ -459,32 +503,64 @@ class SignalSubscriber:
                 '(or use live_transport="poll", which needs no extras)'
             ) from exc
 
+    def _negotiate_ws(self) -> str:
+        """Negotiate a Web PubSub client URL for THIS endpoint.
+
+        The relay's contract is per-ENDPOINT: the body names ``endpoint_id`` and
+        the returned 5-minute token auto-joins exactly that endpoint's group.
+
+        Raises:
+            AuthError: 401/403 — wrong key or scope, never retried.
+            ValidationRejected: Any other 4xx except 429 (unknown endpoint,
+                endpoint not websocket, endpoint not active) — a CONFIGURATION
+                error; retrying an identical request cannot succeed.
+            httpx.HTTPStatusError: 5xx/429 — treated as transient by the caller.
+        """
+        response = self._client.post("/v1/ws/negotiate", json={"endpoint_id": self._endpoint_id})
+        if response.status_code in (401, 403):
+            raise AuthError(f"relay rejected the API key (HTTP {response.status_code})")
+        if 400 <= response.status_code < 500 and response.status_code != 429:
+            raise ValidationRejected(
+                f"ws negotiate rejected (HTTP {response.status_code}): "
+                f"{response.text[:200]} — check that endpoint_id names YOUR active "
+                f"websocket endpoint; this is a configuration error and is not retried"
+            )
+        response.raise_for_status()
+        return str(response.json()["url"])
+
+    def _create_ws_client(self, url: str) -> Any:
+        """Build the Web PubSub client (factory seam; azure import stays lazy)."""
+        if self._ws_client_factory is not None:
+            return self._ws_client_factory(url)
+        from azure.messaging.webpubsubclient import WebPubSubClient
+
+        return WebPubSubClient(url)
+
     def _run_webpubsub(self) -> None:
         """Live phase over Azure Web PubSub with jittered reconnect.
 
-        Flow per connection: negotiate a client URL over REST, connect, subscribe,
-        re-run REST catch-up (closing the connect-window gap), then park until
-        ``stop()``. Any connection failure notifies ``on_error`` and reconnects
-        with jittered backoff; fatal SDK errors and callback errors propagate.
+        Flow per connection (the relay's ws-resume protocol): negotiate for the
+        endpoint, connect, subscribe and BUFFER incoming frames, run REST
+        catch-up (closing the connect-window gap), drain the buffer in arrival
+        order (deduped by sequence), then process frames live until ``stop()``.
+        Any connection failure notifies ``on_error`` and reconnects with
+        jittered backoff; fatal errors and callback errors propagate.
         """
-        from azure.messaging.webpubsubclient import WebPubSubClient
-
         reconnect_round = 0
         while not self._stop_event.is_set():
             try:
-                response = self._client.post(
-                    "/v1/ws/negotiate", json={"strategy_id": self.strategy_id}
-                )
-                if response.status_code in (401, 403):
-                    raise AuthError(f"relay rejected the API key (HTTP {response.status_code})")
-                response.raise_for_status()
-                url = response.json()["url"]
-                client = WebPubSubClient(url)
+                url = self._negotiate_ws()
+                client = self._create_ws_client(url)
+                with self._ws_phase_lock:
+                    self._ws_buffering = True
+                    self._ws_prelive = []
                 with client:
                     client.subscribe("group-message", self._on_ws_event)
                     reconnect_round = 0
-                    # Close the gap between catch-up and the connect instant.
+                    # Protocol steps 3-4: catch up over REST while live frames
+                    # buffer, then drain the buffer before going live.
                     self._catch_up("catchup")
+                    self._drain_prelive()
                     while not self._stop_event.wait(1.0):
                         if self._pending_error is not None:
                             error = self._pending_error
@@ -492,24 +568,53 @@ class SignalSubscriber:
                             raise error
             except _FATAL_TYPES:
                 raise
+            except ValidationRejected:
+                raise  # negotiate config error — retrying cannot succeed
             except Exception as exc:  # third-party client errors have no stable type
                 if self._on_error is not None:
                     self._on_error(exc)
                 reconnect_round += 1
                 self._sleep(backoff_delay(min(reconnect_round, 6), self._random_fn))
 
-    def _on_ws_event(self, event: Any) -> None:
-        """Web PubSub message handler: parse and hand to the gap-aware pipeline.
+    def _drain_prelive(self) -> None:
+        """Process buffered pre-live frames in arrival order, then go live.
 
-        Runs on the Azure client's thread; errors are stashed for the main loop to
-        re-raise (the third-party callback runner would otherwise swallow them).
+        Loops so frames arriving DURING the drain are also processed before the
+        buffering flag flips off; the flag flip is atomic with observing an
+        empty buffer, so no frame can slip between buffered and live handling.
+        """
+        while True:
+            with self._ws_phase_lock:
+                if not self._ws_prelive:
+                    self._ws_buffering = False
+                    return
+                batch = self._ws_prelive
+                self._ws_prelive = []
+            for received in batch:
+                self._handle_live_message(received)
+
+    def _on_ws_event(self, event: Any) -> None:
+        """Web PubSub message handler: verify the frame's HMAC, then deliver.
+
+        Runs on the ws client's thread. The frame signature is verified over
+        the raw envelope bytes BEFORE parsing (per-endpoint secret, ±5 min
+        freshness). A frame failing verification is reported through
+        ``on_error`` and DROPPED — a forged or replayed frame must be unable to
+        halt the subscriber, and any genuine gap it conceals is recovered from
+        REST by sequence arithmetic. Pipeline errors are stashed for the main
+        loop to re-raise (the third-party callback runner would swallow them).
         """
         try:
-            data = event.data
-            if isinstance(data, (str, bytes)):
-                received = ReceivedSignal.model_validate_json(data)
-            else:
-                received = ReceivedSignal.model_validate(data)
+            received = verify_ws_frame(event.data, self._endpoint_secret or "")
+        except SignatureVerificationError as exc:
+            if self._on_error is not None:
+                self._on_error(exc)
+            return
+        try:
+            with self._ws_phase_lock:
+                if self._ws_buffering:
+                    self._ws_prelive.append(received)
+                    return
             self._handle_live_message(received)
         except Exception as exc:
             self._pending_error = exc

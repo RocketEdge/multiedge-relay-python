@@ -5,7 +5,7 @@ full contract: never-silent-loss publishing, at-least-once cursor-based subscrip
 and HMAC-verified webhooks.
 """
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 
 from .cursor import CursorStore, FileCursorStore
 from .dlq import DiskDLQ, DLQEntry, DLQResendReport
@@ -26,7 +26,7 @@ from .publisher_async import AsyncSignalPublisher
 from .state_sqlite import SqliteStateStore
 from .subscriber import SignalSubscriber
 from .ulid import new_ulid
-from .webhook import verify_signature
+from .webhook import verify_signature, verify_ws_frame
 
 __all__ = [
     "AsyncSignalPublisher",
@@ -54,4 +54,5 @@ __all__ = [
     "__version__",
     "new_ulid",
     "verify_signature",
+    "verify_ws_frame",
 ]

@@ -80,6 +80,10 @@ class FakeRelay:
     # stored opaquely as {"key_id": ..., "bundle": ...} — like the real relay.
     recipient_keys: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     sender_keys: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # Web PubSub negotiate: recorded request bodies + an optional forced status
+    # (e.g. 404 unknown_endpoint / 409 endpoint_not_active) for fatal-path tests.
+    ws_negotiate_bodies: list[dict[str, Any]] = field(default_factory=list)
+    ws_negotiate_status: int | None = None
 
     def __post_init__(self) -> None:
         self._seq: dict[str, int] = {}
@@ -176,6 +180,18 @@ class FakeRelay:
 
         @app.post("/v1/ws/negotiate")
         async def negotiate(request: Request) -> JSONResponse:
+            # Mirrors the REAL relay (NegotiateEndpoints.cs): the body must name
+            # the subscriber's endpoint_id; a missing one is a 422. The fake once
+            # accepted any body, which is how the SDK's strategy_id-shaped
+            # negotiate drifted past the suite unnoticed.
+            body = await request.json()
+            self.ws_negotiate_bodies.append(body)
+            if self.ws_negotiate_status is not None:
+                return JSONResponse(
+                    {"error": "forced negotiate failure"}, status_code=self.ws_negotiate_status
+                )
+            if not body.get("endpoint_id"):
+                return JSONResponse({"error": "endpoint_id is required"}, status_code=422)
             return JSONResponse(
                 {"url": "wss://example.invalid/client/hubs/signals?access_token=fake"}
             )

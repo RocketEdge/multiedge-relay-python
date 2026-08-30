@@ -6,6 +6,51 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-30
+
+### Fixed
+
+- **`live_transport="webpubsub"` now matches the deployed relay.** It could never
+  have worked before — three drifts at once, each invisible because the fake relay
+  in the test suite accepted the SDK's own dialect (the same failure mode as the
+  0.6.0 `duplicate` rename, one layer down):
+  1. **Negotiate sent the wrong body.** The SDK posted `{"strategy_id": ...}`;
+     the relay's `/v1/ws/negotiate` requires `{"endpoint_id": ...}` (tokens are
+     minted per ENDPOINT group) and answers 422 to anything else — every connect
+     attempt failed and retried forever.
+  2. **Frames were parsed as the wrong shape.** The relay pushes
+     `{"envelope": "<raw envelope JSON string>", "signature": "<hex>",
+     "timestamp": <unix_s>}`; the SDK tried to parse the whole frame as a
+     `ReceivedSignal`, which can only raise `ValidationError`.
+  3. **The frame signature was never verified.** The per-endpoint HMAC (the
+     reason the envelope travels as a raw string at all) was ignored.
+  The fake relay's negotiate endpoint now mirrors the real server (records the
+  body, 422s a missing `endpoint_id`), so this class of drift is caught.
+
+### Added
+
+- `SignalSubscriber(..., endpoint_id=..., endpoint_secret=...)` — both REQUIRED
+  for `live_transport="webpubsub"` (a `ValueError` at construction otherwise):
+  `endpoint_id` is the subscriber's websocket endpoint ULID; `endpoint_secret`
+  is the endpoint's signing secret (`secret_base64`, shown once at creation).
+- **Every push frame is HMAC-verified before parsing** (HMAC-SHA256 over
+  `"{timestamp}." + envelope-utf8-bytes`, same key precedence as webhooks,
+  ±5 min freshness). A frame that fails verification is reported through
+  `on_error` and dropped — a forged or replayed frame can neither be delivered
+  nor halt the subscriber; any genuine gap it conceals is recovered from REST
+  by sequence arithmetic.
+- `verify_ws_frame(frame, secret)` — the frame-verification primitive, exported
+  for hand-rolled websocket consumers (the ws twin of `verify_signature`).
+- **Pre-live buffering per the ws-resume protocol:** frames arriving between
+  socket-open and the end of REST catch-up are buffered (verified, unprocessed)
+  and drained in arrival order afterwards, deduped by sequence — the spec's
+  connect-buffer-catchup-drain ordering instead of racing the two feeds.
+- Negotiate configuration errors (4xx other than 429: unknown endpoint,
+  endpoint not websocket, endpoint not active) now raise `ValidationRejected`
+  out of `run()` instead of retrying an identical doomed request forever.
+- `ws_client_factory` constructor seam so the transport is testable without the
+  `[webpubsub]` extra installed.
+
 ## [0.6.1] - 2026-08-30
 
 ### Fixed

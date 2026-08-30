@@ -459,11 +459,34 @@ What "exactly once" honestly means here:
 - `live_transport="poll"` (default) — zero extra dependencies; repeats the catch-up
   query every `poll_interval` seconds. Ideal for minute-scale strategies.
 - `live_transport="webpubsub"` — push delivery over Azure Web PubSub
-  (`pip install "multiedge-relay[webpubsub]"`). The subscriber dedupes overlap by
-  sequence, parks out-of-order messages, back-fills gaps over REST, and re-runs
-  catch-up after any reconnect. Ordering truth is always the relay `sequence`, never
-  the transport's own IDs. If a gap cannot be filled from REST, the subscriber raises
-  `GapUnrecoverableError` instead of skipping data.
+  (`pip install "multiedge-relay[webpubsub]"`). Requires the subscriber's own
+  websocket **endpoint**: pass `endpoint_id` (the endpoint ULID — negotiate is
+  per endpoint, not per strategy) and `endpoint_secret` (the endpoint's signing
+  secret, shown once at endpoint creation as `secret_base64`):
+
+  ```python
+  subscriber = SignalSubscriber(
+      api_key="mesk_...",
+      strategy_id="01M184MJB6T58CV3SRZ9GRGDRM",
+      on_signal=on_signal,
+      live_transport="webpubsub",
+      endpoint_id="01M18ENDPOINTULID26CHARSXX",
+      endpoint_secret=os.environ["MULTIEDGE_WS_SECRET"],   # base64 of 32 bytes
+  )
+  ```
+
+  Every push frame's HMAC is verified over the raw envelope bytes BEFORE the
+  envelope is parsed (`verify_ws_frame` is exported if you hand-roll your own
+  websocket consumer); a frame failing verification is reported through
+  `on_error` and dropped — it can neither be delivered nor halt the subscriber.
+  Frames arriving while the post-connect REST catch-up runs are buffered and
+  drained in order afterwards. The subscriber dedupes overlap by sequence,
+  parks out-of-order messages, back-fills gaps over REST, and re-runs catch-up
+  after any reconnect. Ordering truth is always the relay `sequence`, never the
+  transport's own IDs. If a gap cannot be filled from REST, the subscriber
+  raises `GapUnrecoverableError` instead of skipping data; a rejected negotiate
+  (unknown/inactive/non-websocket endpoint) raises `ValidationRejected` rather
+  than retrying a configuration error.
 
 ## Two-Terminal Live Demo (Rebalance Feed)
 

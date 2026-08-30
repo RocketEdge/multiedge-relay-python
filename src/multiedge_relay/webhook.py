@@ -1,18 +1,22 @@
-"""Webhook signature verification: HMAC-SHA256 with freshness and constant-time compare.
+"""Delivery signature verification: HMAC-SHA256 with freshness, constant-time compare.
 
 Purpose:
-    Subscribers that receive signals by webhook must authenticate every request
-    before trusting it. ``verify_signature`` checks the relay's signature scheme and
-    parses the body into a ``ReceivedSignal`` only after verification passes.
+    Subscribers must authenticate every relay delivery before trusting it.
+    ``verify_signature`` checks a WEBHOOK request; ``verify_ws_frame`` checks a
+    Web PubSub push frame. Both parse into a ``ReceivedSignal`` only after
+    verification passes, and both share the same MAC construction — only the
+    envelope differs (HTTP headers vs a JSON frame).
 
-Contract:
-    * Signature: ``HMAC-SHA256(secret, f"{timestamp}." + raw_body)``, hex-encoded,
-      sent as ``X-MultiEdge-Signature: sha256=<hex>``.
-    * Freshness: ``X-MultiEdge-Timestamp`` (unix seconds) must be within ``max_age``
-      of ``now`` in either direction (replay and clock-skew guard).
+Contract (mirrors the relay's ``WebhookSignature`` exactly):
+    * Signature: ``HMAC-SHA256(secret, f"{timestamp}." + raw_bytes)``, lowercase
+      hex. Webhooks send it as ``X-MultiEdge-Signature: sha256=<hex>``; ws frames
+      carry it in the ``signature`` field WITHOUT the ``sha256=`` prefix.
+    * Freshness: the unix-seconds timestamp must be within ``max_age`` of ``now``
+      in either direction (replay and clock-skew guard).
     * Comparison uses ``hmac.compare_digest`` — constant time, no early exit.
-    * Verify the raw received bytes exactly as they arrived; re-serializing the body
-      changes the bytes and breaks the signature by design.
+    * Verify the raw received bytes exactly as they arrived; re-serializing
+      changes the bytes and breaks the signature by design. For ws frames that
+      means the UTF-8 bytes of the ``envelope`` STRING, verified before parsing.
 """
 
 from __future__ import annotations
@@ -21,9 +25,10 @@ import base64
 import binascii
 import hashlib
 import hmac
+import json
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .exceptions import SignatureVerificationError
 from .models import ReceivedSignal
@@ -57,6 +62,27 @@ def _resolve_hmac_key(secret: str) -> bytes:
     if len(decoded) == _RAW_SECRET_LENGTH:
         return decoded
     return secret.encode()
+
+
+def _check_freshness(
+    timestamp: int, max_age: timedelta, now: Callable[[], datetime] | None
+) -> None:
+    """Reject a timestamp outside ``max_age`` of now (both directions)."""
+    current = now() if now is not None else datetime.now(UTC)
+    age = abs(current - datetime.fromtimestamp(timestamp, tz=UTC))
+    if age > max_age:
+        raise SignatureVerificationError(
+            f"timestamp outside tolerance: |now - timestamp| = {age} > {max_age}"
+        )
+
+
+def _check_digest(secret: str, timestamp: int, raw: bytes, claimed_hex: str) -> None:
+    """Constant-time comparison of the relay MAC over ``"{timestamp}." + raw``."""
+    expected = hmac.new(
+        _resolve_hmac_key(secret), f"{timestamp}.".encode() + raw, hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expected, claimed_hex):
+        raise SignatureVerificationError("signature mismatch")
 
 
 def verify_signature(
@@ -117,20 +143,81 @@ def verify_signature(
             f"malformed {TIMESTAMP_HEADER} header: not an integer unix timestamp"
         ) from exc
 
-    current = now() if now is not None else datetime.now(UTC)
-    age = abs(current - datetime.fromtimestamp(timestamp, tz=UTC))
-    if age > max_age:
-        raise SignatureVerificationError(
-            f"timestamp outside tolerance: |now - timestamp| = {age} > {max_age}"
-        )
-
-    expected = hmac.new(
-        _resolve_hmac_key(secret), f"{timestamp}.".encode() + raw_body, hashlib.sha256
-    ).hexdigest()
-    if not hmac.compare_digest(expected, claimed_hex):
-        raise SignatureVerificationError("signature mismatch")
+    _check_freshness(timestamp, max_age, now)
+    _check_digest(secret, timestamp, raw_body, claimed_hex)
 
     received = ReceivedSignal.model_validate_json(raw_body)
+    if unsealer is not None:
+        received = unsealer.unseal_signal(received)
+    return received
+
+
+def verify_ws_frame(
+    frame: str | bytes | bytearray | Mapping[str, Any],
+    secret: str,
+    *,
+    max_age: timedelta = timedelta(minutes=5),
+    now: Callable[[], datetime] | None = None,
+    unsealer: Unsealer | None = None,
+) -> ReceivedSignal:
+    """Verify a Web PubSub push frame and parse its envelope into a ``ReceivedSignal``.
+
+    The relay pushes each live signal to the endpoint group as::
+
+        {"envelope": "<raw envelope JSON string>", "signature": "<hex>", "timestamp": <unix_s>}
+
+    The HMAC is computed over the UTF-8 bytes of the ``envelope`` STRING (with
+    the ``"{timestamp}."`` prefix, per-endpoint secret) and MUST be checked
+    before the envelope is parsed — this function does exactly that. Note the
+    frame's ``signature`` field carries bare lowercase hex, WITHOUT the
+    ``sha256=`` prefix webhooks use.
+
+    Args:
+        frame: The frame as received — raw text/bytes, or the already-parsed
+            mapping some Web PubSub clients hand to callbacks.
+        secret: The endpoint's signing secret (same key precedence as
+            :func:`verify_signature`: base64-of-32-bytes decodes to the raw key,
+            anything else keys on the UTF-8 bytes).
+        max_age: Maximum allowed |now - timestamp| (default 5 minutes).
+        now: Injectable clock returning an aware ``datetime`` (test seam).
+        unsealer: Sealed-mode unsealer, applied AFTER HMAC verification.
+
+    Returns:
+        The verified, parsed signal.
+
+    Raises:
+        SignatureVerificationError: Malformed frame, stale/future timestamp, or
+            digest mismatch. Treat the frame as untrusted and do not process it.
+        UnsealError: The sealed payload failed verification or decryption.
+    """
+    if isinstance(frame, (str, bytes, bytearray)):
+        try:
+            parsed = json.loads(frame)
+        except ValueError as exc:
+            raise SignatureVerificationError("malformed ws frame: not valid JSON") from exc
+    else:
+        parsed = dict(frame)
+    if not isinstance(parsed, dict):
+        raise SignatureVerificationError("malformed ws frame: expected a JSON object")
+
+    envelope = parsed.get("envelope")
+    signature = parsed.get("signature")
+    timestamp = parsed.get("timestamp")
+    if (
+        not isinstance(envelope, str)
+        or not isinstance(signature, str)
+        or isinstance(timestamp, bool)
+        or not isinstance(timestamp, int)
+    ):
+        raise SignatureVerificationError(
+            "malformed ws frame: expected string 'envelope', hex string 'signature' "
+            "and integer unix 'timestamp'"
+        )
+
+    _check_freshness(timestamp, max_age, now)
+    _check_digest(secret, timestamp, envelope.encode(), signature)
+
+    received = ReceivedSignal.model_validate_json(envelope)
     if unsealer is not None:
         received = unsealer.unseal_signal(received)
     return received

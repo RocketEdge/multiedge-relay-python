@@ -295,7 +295,14 @@ def test_stop_unblocks_run(relay: FakeRelay, cursor_root: Path) -> None:
 def test_webpubsub_without_extra_raises_helpful_import_error(
     relay: FakeRelay, cursor_root: Path
 ) -> None:
-    subscriber = make_subscriber(relay, cursor_root, Collector(), live_transport="webpubsub")
+    subscriber = make_subscriber(
+        relay,
+        cursor_root,
+        Collector(),
+        live_transport="webpubsub",
+        endpoint_id="01ENDPOINTAAAAAAAAAAAAAA01",
+        endpoint_secret="c2VjcmV0",
+    )
     with pytest.raises(ImportError, match=r"multiedge-relay\[webpubsub\]"):
         subscriber.run()
 
