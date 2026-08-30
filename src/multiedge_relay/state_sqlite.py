@@ -40,8 +40,9 @@ Concurrency & durability:
     thread; webhook servers use worker threads). WAL journal with
     ``synchronous=FULL`` — a lost marker would mean a double-invocation, so the
     marker fsync is the product; signal rates make the cost irrelevant.
-    ``auto_vacuum=INCREMENTAL`` plus post-prune ``incremental_vacuum`` returns
-    freed pages to the OS, so the file never balloons past its live content.
+    ``auto_vacuum=INCREMENTAL`` plus a post-delete incremental-vacuum DRAIN
+    returns freed pages to the OS, so the file never balloons past its live
+    content (see :meth:`SqliteStateStore._vacuum_freed_pages`).
 """
 
 from __future__ import annotations
@@ -212,7 +213,7 @@ class SqliteStateStore:
                 self._rollback()
                 raise
             if deleted:
-                self._conn.execute("PRAGMA incremental_vacuum").fetchall()
+                self._vacuum_freed_pages()
 
     # ------------------------------------------------------------- exactly-once wrappers
     def exactly_once(self, handler: Handler, *, on_duplicate: Handler | None = None) -> Handler:
@@ -320,7 +321,7 @@ class SqliteStateStore:
                 self._rollback()
                 raise
             if deleted:
-                self._conn.execute("PRAGMA incremental_vacuum").fetchall()
+                self._vacuum_freed_pages()
         return int(deleted)
 
     @property
@@ -373,6 +374,36 @@ class SqliteStateStore:
             "VALUES (?, ?, ?, ?)",
             (signal.signal_id, signal.strategy_id, signal.sequence, self._clock().isoformat()),
         )
+
+    def _vacuum_freed_pages(self) -> None:
+        """Return every page freed by a delete to the OS.
+
+        ``PRAGMA incremental_vacuum`` reclaims ONE page per ``sqlite3_step()``.
+        Older SQLite (<= 3.50) surfaced a row per reclaimed page, so a single
+        ``execute(...).fetchall()`` happened to step the pragma to exhaustion;
+        SQLite 3.51+ returns no rows, ``fetchall()`` stops immediately, and that
+        idiom reclaims exactly one page per call — the ledger then grows without
+        bound on a long-running subscriber. Passing an explicit page count does
+        NOT help: ``incremental_vacuum(N)`` still yields after one page there.
+        So drive it explicitly and stop when the freelist is drained.
+
+        Caller must hold ``self._lock`` and be outside a transaction (the pragma
+        is a no-op inside one). Bounded by the freelist shrinking: the loop exits
+        on the first iteration that frees nothing, so a SQLite that refuses to
+        vacuum costs one extra pragma rather than spinning forever.
+        """
+        remaining = self._freelist_count()
+        while remaining:
+            self._conn.execute("PRAGMA incremental_vacuum").fetchall()
+            after = self._freelist_count()
+            if after >= remaining:
+                break  # no progress: stop rather than spin
+            remaining = after
+
+    def _freelist_count(self) -> int:
+        """Pages on the database freelist (unused but still allocated in the file)."""
+        row = self._conn.execute("PRAGMA freelist_count").fetchone()
+        return int(row[0]) if row is not None else 0
 
     def _rollback(self) -> None:
         """Roll back the open transaction, tolerating an already-closed one."""

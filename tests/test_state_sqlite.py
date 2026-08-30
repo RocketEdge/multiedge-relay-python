@@ -354,6 +354,21 @@ def test_prune_vacuums_freed_pages(state_path: Path) -> None:
         assert row == (0,)  # freed pages returned to the OS, file does not balloon
 
 
+def test_commit_vacuums_freed_pages(state_path: Path) -> None:
+    # The subscriber-driven path: commit() deletes markers at or below the
+    # watermark, so it must drain the freelist too. Regression guard for a
+    # freelist larger than one page -- SQLite frees a single page per step, so
+    # any fix that vacuums "once" passes a one-page fixture while a real store
+    # still balloons.
+    with SqliteStateStore(state_path) as store:
+        for n in range(1, 201):
+            with store.process(make_signal(n)):
+                pass
+        store.commit(STRATEGY, 200)
+        row = store.connection.execute("PRAGMA freelist_count").fetchone()
+        assert row == (0,)  # every freed page returned, not just the first
+
+
 # ------------------------------------------------------------------- lifecycle
 def test_close_is_idempotent_and_context_manager_closes(state_path: Path) -> None:
     store = SqliteStateStore(state_path)
