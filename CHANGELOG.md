@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-30
+
+### Fixed
+
+- **The README quickstart still published a single-ticker payload**, directly above the
+  new section explaining that the field is `signal_portfolio_weight` and not
+  `target_weight`. PyPI renders the README as the project page, so the first code a
+  reader saw contradicted the page it sat on — and would be refused with 422 by any feed
+  on the default `portfolio_rebalance/1.0` schema. The quickstart now publishes a whole
+  portfolio and links to the section.
+- `examples/seal_publish.py` carried the same `target_weight` payload;
+  `examples/publish_batch_with_dlq.py` sliced one portfolio into one signal per ticker —
+  the exact anti-pattern `publish_many` should not demonstrate. It now backfills three
+  separate days, each a complete portfolio, which is what genuinely independent signals
+  look like.
+- `tests/test_docs_contract.py` pinned only one example's payload, which is how three
+  other samples drifted past it. It now scans every shipped file for fields the standard
+  schema rejects.
+
 ## [0.6.0] - 2026-08-30
 
 ### Changed

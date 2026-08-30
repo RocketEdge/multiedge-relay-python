@@ -61,10 +61,27 @@ from multiedge_relay import Signal, SignalPublisher
 
 with SignalPublisher(api_key="mesk_your_api_key") as publisher:
     ack = publisher.publish(
-        Signal(strategy_id="my-strategy", payload={"action": "BUY", "ticker": "SPY"})
+        Signal(
+            strategy_id="my-strategy",
+            # One signal carries the COMPLETE portfolio for one date.
+            payload={
+                "kind": "portfolio_rebalance",
+                "signal_date": "2026-08-31",
+                "planned_execution_date": "2026-09-01",
+                "positions": [
+                    {"ticker": "SPY", "action": "BUY", "signal_portfolio_weight": 0.6},
+                    {"ticker": "TLT", "action": "SELL", "signal_portfolio_weight": 0.4},
+                ],
+            },
+        )
     )
     print(ack.sequence, ack.signal_id)
 ```
+
+That payload is the relay's shipped `portfolio_rebalance/1.0` schema, which a new feed
+validates against by default — see [Publishing a Whole Portfolio in One
+Signal](#publishing-a-whole-portfolio-in-one-signal) for why the whole book travels in one
+signal, and what the limits are.
 
 ## Publishing a Whole Portfolio in One Signal
 

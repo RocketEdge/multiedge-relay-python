@@ -36,7 +36,18 @@ def main() -> None:
         ack = publisher.publish(
             Signal(
                 strategy_id=strategy_id,
-                payload={"action": "BUY", "ticker": "SPY", "target_weight": 0.25},
+                # One signal = one complete portfolio, sealed as a unit: the whole
+                # book shares a single envelope, so the relay cannot even count
+                # the positions, let alone read them.
+                payload={
+                    "kind": "portfolio_rebalance",
+                    "signal_date": "2026-08-31",
+                    "planned_execution_date": "2026-09-01",
+                    "positions": [
+                        {"ticker": "SPY", "action": "BUY", "signal_portfolio_weight": 0.6},
+                        {"ticker": "TLT", "action": "SELL", "signal_portfolio_weight": 0.4},
+                    ],
+                },
             )
         )
     print(f"sealed + accepted: signal_id={ack.signal_id} sequence={ack.sequence}")

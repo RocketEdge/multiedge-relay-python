@@ -79,6 +79,31 @@ def publish_minimal() -> Any:
         sys.path.remove(str(EXAMPLES))
 
 
+def test_no_shipped_sample_uses_a_field_the_standard_schema_rejects() -> None:
+    """No reader-facing sample may name a field `portfolio_rebalance/1.0` refuses.
+
+    The schema is ``additionalProperties: false``, so `target_weight` is not a
+    harmless synonym for `signal_portfolio_weight` — it is a 422. This checks the
+    shipped TEXT because that is what people copy; the previous version of this
+    test pinned one example's payload and three other samples drifted past it,
+    including the README quickstart that PyPI renders as the project page.
+    """
+    offenders = [
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in shipped_text_files()
+        if "target_weight"
+        in path.read_text(encoding="utf-8").replace(
+            # The prose that warns against the field necessarily names it.
+            "not `target_weight`",
+            "",
+        )
+    ]
+    assert offenders == [], (
+        "portfolio_rebalance/1.0 is additionalProperties:false — `target_weight` is "
+        f"refused with 422, so these samples cannot be copied: {offenders}"
+    )
+
+
 def test_minimal_example_payload_matches_the_standard_schema(publish_minimal: Any) -> None:
     payload = publish_minimal.rebalance_payload()
 
