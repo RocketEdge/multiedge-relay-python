@@ -101,7 +101,7 @@ class SignalPublisher:
 
     Usage::
 
-        with SignalPublisher(api_key="mek_...") as publisher:
+        with SignalPublisher(api_key="mesk_...") as publisher:
             ack = publisher.publish(Signal(strategy_id="s", payload={...}))
 
     Attributes:

@@ -57,7 +57,7 @@ Requires Python 3.11+.
 ```python
 from multiedge_relay import Signal, SignalPublisher
 
-with SignalPublisher(api_key="mek_your_api_key") as publisher:
+with SignalPublisher(api_key="mesk_your_api_key") as publisher:
     ack = publisher.publish(
         Signal(strategy_id="my-strategy", payload={"action": "BUY", "ticker": "SPY"})
     )
@@ -77,7 +77,7 @@ def on_signal(signal: ReceivedSignal, meta: SignalMeta) -> None:
     print(f"[{meta.source}] seq={signal.sequence} {signal.payload}")
 
 subscriber = SignalSubscriber(
-    api_key="mek_your_api_key",
+    api_key="mesk_your_api_key",
     strategy_id="my-strategy",
     on_signal=on_signal,
 )
@@ -128,7 +128,7 @@ look"* but *"we cannot look"*.
 
 ```bash
 multiedge sealed keygen --kind recipient --out ~/.multiedge/keys/recipient.key.json
-multiedge sealed register --key ~/.multiedge/keys/recipient.key.json --client CLIENT_ID --api-key mek_...
+multiedge sealed register --key ~/.multiedge/keys/recipient.key.json --client CLIENT_ID --api-key mesk_...
 # Read the printed fingerprint to your publisher over a separate channel.
 ```
 
@@ -136,7 +136,7 @@ multiedge sealed register --key ~/.multiedge/keys/recipient.key.json --client CL
 
 ```bash
 multiedge sealed keygen --kind sender --out ~/.multiedge/keys/sender.key.json
-multiedge sealed register --key ~/.multiedge/keys/sender.key.json --strategy STRATEGY_ID --api-key mek_...
+multiedge sealed register --key ~/.multiedge/keys/sender.key.json --strategy STRATEGY_ID --api-key mesk_...
 ```
 
 **Publish sealed:**
@@ -147,12 +147,12 @@ from multiedge_relay.sealed import Sealer, SenderKeypair
 
 sender = SenderKeypair.load("~/.multiedge/keys/sender.key.json")
 sealer = Sealer.from_relay(
-    api_key="mek_...", strategy_id="STRATEGY_ID", sender=sender,
+    api_key="mesk_...", strategy_id="STRATEGY_ID", sender=sender,
     # Strongest configuration: pin the fingerprints your subscribers read to
     # you over the phone / signed email — the relay then cannot substitute keys.
     pinned_recipients={"<64-hex fingerprint>", ...},
 )
-with SignalPublisher(api_key="mek_...", sealer=sealer) as publisher:
+with SignalPublisher(api_key="mesk_...", sealer=sealer) as publisher:
     publisher.publish(Signal(strategy_id="STRATEGY_ID", payload={"weight": 0.5}))
 ```
 
@@ -164,11 +164,11 @@ from multiedge_relay.sealed import RecipientKeypair, Unsealer
 
 recipient = RecipientKeypair.load("~/.multiedge/keys/recipient.key.json")
 unsealer = Unsealer.from_relay(
-    api_key="mek_...", strategy_id="STRATEGY_ID", recipient=recipient,
+    api_key="mesk_...", strategy_id="STRATEGY_ID", recipient=recipient,
     pinned_sender="<the publisher's 64-hex fingerprint>",
 )
 subscriber = SignalSubscriber(
-    api_key="mek_...", strategy_id="STRATEGY_ID",
+    api_key="mesk_...", strategy_id="STRATEGY_ID",
     on_signal=lambda s, m: print(s.payload),   # plaintext here — nowhere else
     unsealer=unsealer,
 )
@@ -275,7 +275,7 @@ from multiedge_relay import SignalSubscriber, SqliteStateStore
 
 store = SqliteStateStore()
 subscriber = SignalSubscriber(
-    api_key="mek_your_api_key",
+    api_key="mesk_your_api_key",
     strategy_id="my-strategy",
     on_signal=store.exactly_once(handle),   # handle completes at most once per signal
     cursor_store=store,                     # same file doubles as the cursor store

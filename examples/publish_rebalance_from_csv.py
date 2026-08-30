@@ -10,7 +10,7 @@ today" signal (an absent day is indistinguishable from an outage; an empty one
 is not).
 
 Run:
-    MULTIEDGE_API_KEY=mek_your_api_key python publish_rebalance_from_csv.py signals.csv
+    MULTIEDGE_API_KEY=mesk_your_api_key python publish_rebalance_from_csv.py signals.csv
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def main() -> None:
     if len(sys.argv) != 2:
         print("usage: python publish_rebalance_from_csv.py <signals.csv>", file=sys.stderr)
         raise SystemExit(2)
-    api_key = os.environ.get("MULTIEDGE_API_KEY", "mek_your_api_key")
+    api_key = os.environ.get("MULTIEDGE_API_KEY", "mesk_your_api_key")
     signals = load_rebalance_signals(Path(sys.argv[1]), strategy_id="rebalance-demo")
     with SignalPublisher(api_key=api_key) as publisher:
         for signal in signals:

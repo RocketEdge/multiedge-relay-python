@@ -61,7 +61,7 @@ class SignalSubscriber:
     Usage::
 
         subscriber = SignalSubscriber(
-            api_key="mek_...", strategy_id="my-strategy", on_signal=callback
+            api_key="mesk_...", strategy_id="my-strategy", on_signal=callback
         )
         subscriber.run()          # blocks: catch-up, then live
         # ... from another thread or a signal handler:

@@ -4,7 +4,7 @@ Offline for a weekend — you miss nothing: the subscriber resumes from its pers
 cursor, replays the backlog in order, then polls for new signals.
 
 Run:
-    MULTIEDGE_API_KEY=mek_your_api_key python subscribe_catchup.py
+    MULTIEDGE_API_KEY=mesk_your_api_key python subscribe_catchup.py
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def on_signal(signal: ReceivedSignal, meta: SignalMeta) -> None:
 def main() -> None:
     """Run the subscriber until Ctrl-C; the cursor survives restarts."""
     subscriber = SignalSubscriber(
-        api_key=os.environ.get("MULTIEDGE_API_KEY", "mek_your_api_key"),
+        api_key=os.environ.get("MULTIEDGE_API_KEY", "mesk_your_api_key"),
         strategy_id="example-strategy",
         on_signal=on_signal,
         live_transport="poll",  # or "webpubsub" with the [webpubsub] extra

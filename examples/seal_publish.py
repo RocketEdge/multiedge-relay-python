@@ -2,11 +2,11 @@
 
 One-time setup (see README "Sealed Mode"):
     multiedge sealed keygen --kind sender --out sender.key.json
-    multiedge sealed register --key sender.key.json --strategy STRATEGY_ID --api-key mek_...
+    multiedge sealed register --key sender.key.json --strategy STRATEGY_ID --api-key mesk_...
     # ...and each subscriber registers a recipient key.
 
 Run:
-    MULTIEDGE_API_KEY=mek_your_api_key MULTIEDGE_STRATEGY_ID=your_strategy \
+    MULTIEDGE_API_KEY=mesk_your_api_key MULTIEDGE_STRATEGY_ID=your_strategy \
         python seal_publish.py
 
 Requires: pip install "multiedge-relay[sealed]"
@@ -22,7 +22,7 @@ from multiedge_relay.sealed import Sealer, SenderKeypair
 
 def main() -> None:
     """Seal a rebalance payload to every entitled subscriber and publish it."""
-    api_key = os.environ.get("MULTIEDGE_API_KEY", "mek_your_api_key")
+    api_key = os.environ.get("MULTIEDGE_API_KEY", "mesk_your_api_key")
     strategy_id = os.environ.get("MULTIEDGE_STRATEGY_ID", "example-strategy")
 
     sender = SenderKeypair.load(os.environ.get("MULTIEDGE_SENDER_KEY", "sender.key.json"))

@@ -5,7 +5,7 @@ The inverse of ``publish_rebalance_from_csv.py``: drains the strategy's backlog 
 ``PORTFOLIO/NONE`` row for empty days).
 
 Run:
-    MULTIEDGE_API_KEY=mek_your_api_key python subscribe_rebalance_to_csv.py out.csv
+    MULTIEDGE_API_KEY=mesk_your_api_key python subscribe_rebalance_to_csv.py out.csv
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ def main() -> None:
         received.append(signal)
 
     subscriber = SignalSubscriber(
-        api_key=os.environ.get("MULTIEDGE_API_KEY", "mek_your_api_key"),
+        api_key=os.environ.get("MULTIEDGE_API_KEY", "mesk_your_api_key"),
         strategy_id="rebalance-demo",
         on_signal=on_signal,
         start_from="earliest",

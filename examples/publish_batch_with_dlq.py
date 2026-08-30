@@ -7,7 +7,7 @@ nothing is silently lost. Failed signals can later be recovered with:
     multiedge dlq resend
 
 Run:
-    MULTIEDGE_API_KEY=mek_your_api_key python publish_batch_with_dlq.py
+    MULTIEDGE_API_KEY=mesk_your_api_key python publish_batch_with_dlq.py
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from multiedge_relay import PublishFailed, Signal, SignalAck, SignalPublisher
 
 def main() -> None:
     """Publish a batch; print per-signal outcomes instead of raising on the first failure."""
-    api_key = os.environ.get("MULTIEDGE_API_KEY", "mek_your_api_key")
+    api_key = os.environ.get("MULTIEDGE_API_KEY", "mesk_your_api_key")
     signals = [
         Signal(strategy_id="example-strategy", payload={"action": "BUY", "ticker": t})
         for t in ("SPY", "TLT", "GLD")

@@ -45,7 +45,7 @@ class AsyncSignalPublisher:
 
     Usage::
 
-        async with AsyncSignalPublisher(api_key="mek_...") as publisher:
+        async with AsyncSignalPublisher(api_key="mesk_...") as publisher:
             ack = await publisher.publish(Signal(strategy_id="s", payload={...}))
 
     Attributes:

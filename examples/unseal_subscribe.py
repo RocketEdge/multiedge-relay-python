@@ -2,11 +2,11 @@
 
 One-time setup (see README "Sealed Mode"):
     multiedge sealed keygen --kind recipient --out recipient.key.json
-    multiedge sealed register --key recipient.key.json --client CLIENT_ID --api-key mek_...
+    multiedge sealed register --key recipient.key.json --client CLIENT_ID --api-key mesk_...
     # Read the printed fingerprint to the publisher over a separate channel.
 
 Run:
-    MULTIEDGE_API_KEY=mek_your_api_key MULTIEDGE_STRATEGY_ID=your_strategy \
+    MULTIEDGE_API_KEY=mesk_your_api_key MULTIEDGE_STRATEGY_ID=your_strategy \
         python unseal_subscribe.py
 
 Requires: pip install "multiedge-relay[sealed]"
@@ -27,7 +27,7 @@ def on_signal(signal: ReceivedSignal, meta: SignalMeta) -> None:
 
 def main() -> None:
     """Follow a sealed strategy stream, decrypting before every callback."""
-    api_key = os.environ.get("MULTIEDGE_API_KEY", "mek_your_api_key")
+    api_key = os.environ.get("MULTIEDGE_API_KEY", "mesk_your_api_key")
     strategy_id = os.environ.get("MULTIEDGE_STRATEGY_ID", "example-strategy")
 
     recipient = RecipientKeypair.load(
