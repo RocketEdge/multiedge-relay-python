@@ -17,6 +17,12 @@ TDD; `uv` tooling; ruff + black + mypy --strict green before "done"; runtime dep
 httpx + pydantic (extras: `[webpubsub]`, `[sealed]`); public-repo hygiene (no internal
 business content or credentials).
 
+Releasing is CI-only: push an annotated `vX.Y.Z` tag whose version EQUALS
+`pyproject.toml`'s (the workflow's first step fails otherwise) and PyPI trusted
+publishing (OIDC) publishes from the `pypi` environment, restricted to `v*` tags. There
+is NO API token anywhere; a manual `twine`/`uv publish` is forbidden. See
+[../CONTRIBUTING.md](../CONTRIBUTING.md).
+
 One signal = one COMPLETE portfolio state: `payload` (≤64 KB, 256 KiB sealed; 413 is
 terminal) carries the whole book, as the shipped `portfolio_rebalance/1.0` schema does
 with an unbounded `positions` list for one signal date. There is NO batch publish
