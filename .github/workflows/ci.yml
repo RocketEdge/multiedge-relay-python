@@ -23,10 +23,11 @@ jobs:
             python-version: "3.14"
             core-only: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # Exact tag, not @v10: astral-sh stopped publishing bare major aliases after v7.
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: ${{ matrix.python-version }}
 
