@@ -97,10 +97,14 @@ class SignalSubscriber:
         Args:
             api_key: Relay API key (Bearer).
             strategy_id: The strategy stream to follow.
-            on_signal: Delivery callback ``(signal, meta)``. MUST be idempotent —
-                delivery is at-least-once. An exception here halts the subscriber
-                WITHOUT committing the cursor, so the signal is redelivered on
-                restart (never silently lost).
+            on_signal: Delivery callback ``(signal, meta)``, invoked once per signal
+                — never with a batch. By convention one signal carries a COMPLETE
+                portfolio (``signal.payload["positions"]``), so one call is one whole
+                portfolio to apply, and the cursor commits only after the call
+                returns: one signal is one atomic apply-and-commit. MUST be
+                idempotent — delivery is at-least-once. An exception here halts the
+                subscriber WITHOUT committing the cursor, so the signal is
+                redelivered on restart (never silently lost).
             base_url: Relay origin.
             cursor_store: Cursor persistence; defaults to ``FileCursorStore()``
                 under ``~/.multiedge/cursor``.
@@ -111,7 +115,10 @@ class SignalSubscriber:
                 catch-up query every ``poll_interval`` seconds; ``"webpubsub"``
                 uses Azure Web PubSub push (requires the ``[webpubsub]`` extra).
             poll_interval: Seconds between live polls (poll transport only).
-            page_size: REST page size for catch-up and gap fill.
+            page_size: REST page size for catch-up and gap fill (server max 500).
+                Transport paging only — a page is fanned out to ``on_signal`` one
+                signal at a time, so this is not a batch-receive API and changing it
+                never changes what the callback sees.
             on_error: Observability hook. Called once per failed HTTP attempt on a
                 catch-up page (which is then retried) and with callback errors
                 (which are then re-raised). Wire it up: with the default unbounded

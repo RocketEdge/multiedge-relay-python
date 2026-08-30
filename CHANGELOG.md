@@ -6,6 +6,46 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-30
+
+### Changed
+
+- **BREAKING: `SignalAck.deduplicated` is now `SignalAck.duplicate`.** The relay sends
+  `duplicate`; the model declared a name the wire never carries, and pydantic ignores
+  unknown fields — so the flag was never actually parsed. It was correct only because
+  the publisher force-set it whenever the response status was 200. The fake relay in
+  the test suite emitted the SDK's name too, so every test agreed with itself and the
+  drift was unobservable; the fake now speaks the relay's dialect, and a new test
+  serves `duplicate` on a **201** so the body is isolated as the source of truth.
+  Migrate with `ack.deduplicated` → `ack.duplicate`; the old name still works as a
+  deprecated property and is removed in 1.0.
+
+### Added
+
+- **`ReceivedSignal.correlation_id`** — the publisher's tracing id, echoed by the relay
+  on every read path (catch-up, webhook, live). It was being dropped on the floor:
+  entitlement field policies filter only `payload`, so it was always available and
+  never surfaced. Additive; the sealed envelope's AAD binds
+  `strategy_id`/`client_signal_id`/`sender_kid` only, so the frozen v1 wire vector is
+  untouched.
+- **README § "Publishing a Whole Portfolio in One Signal"** and **§ "Receiving a Whole
+  Portfolio"**, plus `publish` / `publish_many` / `on_signal` / `page_size` docstrings.
+  The quickstart taught a single-ticker payload, so the only documented way to send a
+  book was to guess — a loop, or a batch API that does not exist. One signal carries
+  one complete portfolio state (`portfolio_rebalance/1.0`, ~900 positions in the 64 KB
+  cap); `publish_many` is N requests, N sequences and **not atomic**, and splitting a
+  portfolio across signals lets a subscriber durably apply half of one.
+
+### Fixed
+
+- **Every quickstart, example and docstring used an invalid `mek_` API-key
+  placeholder.** The relay accepts only `mesk_` keys, so a copy-pasted sample was
+  rejected at auth before the reader reached anything the SDK does. `publish_minimal.py`
+  also published a single-ticker payload that a feed pinned to the default
+  `portfolio_rebalance/1.0` schema refuses with 422 (`additionalProperties: false`).
+  Both are now guarded by `tests/test_docs_contract.py`, which reads the shipped text —
+  prose defects are invisible to every other test in the suite.
+
 ## [0.5.0] - 2026-08-30
 
 ### Fixed

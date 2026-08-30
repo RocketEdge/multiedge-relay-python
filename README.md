@@ -12,7 +12,9 @@ Official Python SDK for MultiEdge Signal Relay — auditable signal-distribution
 - [Overview](#overview)
 - [Install](#install)
 - [Quickstart: Publish](#quickstart-publish)
+- [Publishing a Whole Portfolio in One Signal](#publishing-a-whole-portfolio-in-one-signal)
 - [Quickstart: Subscribe](#quickstart-subscribe)
+- [Receiving a Whole Portfolio](#receiving-a-whole-portfolio)
 - [Webhook Verification](#webhook-verification)
 - [Sealed Mode — End-to-End Encryption](#sealed-mode--end-to-end-encryption)
 - [Error Handling — Never Silent Loss](#error-handling--never-silent-loss)
@@ -64,6 +66,68 @@ with SignalPublisher(api_key="mesk_your_api_key") as publisher:
     print(ack.sequence, ack.signal_id)
 ```
 
+## Publishing a Whole Portfolio in One Signal
+
+**One signal carries one complete portfolio state for one date.** That is why there is no
+batch publish endpoint: the batching lives *inside* the payload, not across requests.
+
+The relay ships a first-class schema for exactly this, `portfolio_rebalance/1.0`, and a new
+feed validates against it by default:
+
+```python
+from multiedge_relay import Signal, SignalPublisher
+
+positions = [
+    {"ticker": "SPY", "action": "BUY", "signal_portfolio_weight": 0.60},
+    {"ticker": "TLT", "action": "SELL", "signal_portfolio_weight": 0.40},
+]
+
+with SignalPublisher(api_key="mesk_your_api_key") as publisher:
+    ack = publisher.publish(
+        Signal(
+            strategy_id="my-strategy",
+            # Deterministic: re-running the feed re-acks instead of double-publishing.
+            client_signal_id="my-strategy:2026-08-31",
+            payload={
+                "kind": "portfolio_rebalance",
+                "signal_date": "2026-08-31",
+                "planned_execution_date": "2026-09-01",
+                "positions": positions,
+            },
+        )
+    )
+    print(ack.sequence, ack.duplicate)
+```
+
+The schema is `additionalProperties: false`, so field names are exact: it is
+`signal_portfolio_weight`, not `target_weight`, and `action` is one of `INITIALIZE`, `BUY`,
+`SELL`. Anything else is rejected with `422` as a `ValidationRejected`.
+
+- **Size.** The payload cap is 64 KB (256 KiB sealed) — roughly 900 positions, so a real
+  institutional book fits in one signal. Over the cap the relay answers `413`, which is
+  **terminal**: `ValidationRejected` is never retried, so leave headroom.
+- **Empty is meaningful.** `"positions": []` is a valid no-action heartbeat. Publish it —
+  an absent day is indistinguishable from an outage, an empty one is not.
+- **Not a portfolio?** Use whatever JSON your strategy's own registered schema allows; the
+  relay carries the payload opaquely.
+
+### Why not `publish_many`?
+
+`publish_many([...])` is a convenience loop, not a batch API — it sends one HTTP request
+per signal:
+
+|                       | one signal, `positions[]`            | `publish_many([...])`                  |
+| --------------------- | ------------------------------------ | -------------------------------------- |
+| HTTP requests         | 1                                    | N                                      |
+| Sequence numbers      | 1                                    | N                                      |
+| Atomic                | yes                                  | **no** — a partial batch is possible   |
+| Subscriber sees       | whole portfolio in one callback      | N callbacks, no completeness signal    |
+| Use it for            | a portfolio / rebalance              | genuinely independent signals          |
+
+Splitting one portfolio across N signals means a subscriber can crash mid-portfolio and
+durably apply half of it, with nothing in the protocol marking where the portfolio ended.
+Keep the portfolio in one signal and that failure mode does not exist.
+
 ## Quickstart: Subscribe
 
 Offline for a weekend — you miss nothing: the subscriber resumes from its cursor,
@@ -86,6 +150,68 @@ subscriber.run()   # blocks: catch-up from cursor, then live
 
 To only drain the backlog (e.g. a cron job), use `subscriber.catch_up_only()`, which
 returns the number of signals delivered.
+
+## Receiving a Whole Portfolio
+
+Every transport delivers **one signal per message** — a webhook body is one signal, a live
+frame is one signal, and REST catch-up pages are fanned out to your callback one at a time.
+So you never receive several signals in one message. What you receive is one signal that
+*contains* the whole portfolio:
+
+```python
+from multiedge_relay import ReceivedSignal, SignalMeta, SignalSubscriber
+
+def on_signal(signal: ReceivedSignal, meta: SignalMeta) -> None:
+    payload = signal.payload
+    positions = payload["positions"]
+    if not positions:
+        return  # explicit no-action heartbeat, not a gap
+    # The whole book arrived together — apply it as ONE unit.
+    rebalance_to(
+        {p["ticker"]: p["signal_portfolio_weight"] for p in positions},
+        as_of=payload["signal_date"],
+    )
+
+SignalSubscriber(
+    api_key="mesk_your_api_key", strategy_id="my-strategy", on_signal=on_signal
+).run()
+```
+
+This is the safe shape, and the reason is the cursor: it is committed only **after**
+`on_signal` returns, so one signal is one atomic apply-and-commit. Crash halfway and the
+whole portfolio is redelivered (your callback must be idempotent). Split across N signals,
+the cursor advances *between* legs and a crash leaves a durably half-applied portfolio that
+the SDK cannot roll back — `SqliteStateStore.exactly_once_tx` is transactional per signal,
+not per group.
+
+`page_size` (default 500, server max 500) is transport paging for catch-up, not a
+batch-receive API; changing it never changes what the callback sees.
+
+### Collecting many signals as a group
+
+To drain a backlog and work on it as a whole — a nightly reconciliation, a CSV export —
+accumulate in the callback and use `catch_up_only()`, which returns the delivered **count**
+(the signals come from your own list):
+
+```python
+received: list[ReceivedSignal] = []
+
+subscriber = SignalSubscriber(
+    api_key="mesk_your_api_key",
+    strategy_id="my-strategy",
+    on_signal=lambda signal, meta: received.append(signal),
+    start_from="earliest",
+)
+count = subscriber.catch_up_only()   # returns how many were delivered
+print(f"{count} signal(s); latest holds {len(received[-1].payload['positions'])} positions")
+```
+
+See [`examples/subscribe_rebalance_to_csv.py`](examples/subscribe_rebalance_to_csv.py) for
+the full round trip, and [`examples/publish_rebalance_from_csv.py`](examples/publish_rebalance_from_csv.py)
+for its publishing inverse.
+
+Webhook receivers work the same way — `verify_signature` returns a single `ReceivedSignal`,
+never a list.
 
 ## Webhook Verification
 

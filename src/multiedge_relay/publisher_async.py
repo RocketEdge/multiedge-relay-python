@@ -89,6 +89,9 @@ class AsyncSignalPublisher:
     async def publish(self, signal: Signal | dict[str, Any]) -> SignalAck:
         """Publish one signal; see ``SignalPublisher.publish`` for the full contract.
 
+        One signal carries one COMPLETE portfolio state — put the whole book in
+        ``signal.payload`` rather than splitting it across signals.
+
         Raises:
             AuthError: Invalid API key (401/403); not retried.
             ValidationRejected: Invalid or oversized signal (422/413); not retried.
@@ -137,7 +140,12 @@ class AsyncSignalPublisher:
         *,
         raise_on_partial: bool = True,
     ) -> list[SignalAck | PublishFailed]:
-        """Publish signals in order; see ``SignalPublisher.publish_many``."""
+        """Publish signals in order; see ``SignalPublisher.publish_many``.
+
+        N awaited requests, N sequence numbers, NOT atomic — and deliberately not
+        concurrent, so relay ordering matches call order. Never use it to split one
+        portfolio across signals.
+        """
         results: list[SignalAck | PublishFailed] = []
         for signal in signals:
             try:

@@ -17,6 +17,20 @@ TDD; `uv` tooling; ruff + black + mypy --strict green before "done"; runtime dep
 httpx + pydantic (extras: `[webpubsub]`, `[sealed]`); public-repo hygiene (no internal
 business content or credentials).
 
+One signal = one COMPLETE portfolio state: `payload` (≤64 KB, 256 KiB sealed; 413 is
+terminal) carries the whole book, as the shipped `portfolio_rebalance/1.0` schema does
+with an unbounded `positions` list for one signal date. There is NO batch publish
+endpoint — `publish_many` is a client-side loop (N requests, N sequences, NOT atomic)
+and must never be documented as a way to send a portfolio, because the cursor commits
+per signal and a split portfolio can be durably half-applied. Receiving mirrors it: one
+signal per message on every transport; `page_size` is transport paging, not a batch API.
+
+Model field names mirror the relay's OWN wire names (`SignalAck.duplicate`, not
+`deduplicated`), and `tests/fake_relay.py` must emit those names — a fake speaking the
+client's dialect can only confirm the client's assumptions. Placeholder API keys are
+`mesk_`, the only prefix the relay accepts; `tests/test_docs_contract.py` enforces both
+that and the example payload shape.
+
 Sealed mode (relay ADR 0004): all crypto lives in `multiedge_relay/sealed/` behind the
 `[sealed]` extra (`cryptography>=47`); core NEVER imports it (CI core-only job proves
 it). The sealed envelope v1 wire format is FROZEN by the committed vector

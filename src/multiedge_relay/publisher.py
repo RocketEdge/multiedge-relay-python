@@ -167,6 +167,13 @@ class SignalPublisher:
     def publish(self, signal: Signal | dict[str, Any]) -> SignalAck:
         """Publish one signal; never silently lose it.
 
+        One signal carries one COMPLETE portfolio state: put the whole book in
+        ``signal.payload`` (the shipped ``portfolio_rebalance/1.0`` schema is exactly
+        that — an unbounded ``positions`` list for one signal date). 64 KB fits
+        roughly 900 positions, and the result is ONE sequence number a subscriber
+        applies atomically. Reach for ``publish_many`` only for signals that are
+        genuinely independent of each other.
+
         Args:
             signal: A ``Signal`` or dict; a missing ``client_signal_id`` is assigned
                 a ULID so retries are idempotent.
@@ -226,6 +233,16 @@ class SignalPublisher:
         raise_on_partial: bool = True,
     ) -> list[SignalAck | PublishFailed]:
         """Publish signals in order, accounting for every one.
+
+        This is **N HTTP requests, N sequence numbers, and it is NOT atomic** — a
+        failure part-way leaves the earlier signals published. There is no batch
+        publish endpoint to make it otherwise: the relay accepts one signal per
+        request by design, because one signal is one atomic, sequenced event.
+
+        So do not use this to split one portfolio across many signals — a subscriber
+        would receive N callbacks with no completeness signal and could durably apply
+        half a portfolio. Put the whole portfolio in one ``publish`` instead, and keep
+        ``publish_many`` for signals that are genuinely independent.
 
         Args:
             signals: Signals to publish sequentially (order preserved).

@@ -42,6 +42,21 @@ before claiming any task complete. Run them fresh.
    `sequence` — never the transport's own sequence IDs.
 4. **Idempotent publish.** `client_signal_id` auto-ULID per signal; the relay returns
    the original ack for duplicates (`SignalAck.duplicate=True`) — retries are safe.
+   **Model field names mirror the relay's OWN wire names, and `tests/fake_relay.py`
+   must emit those names.** `SignalAck.duplicate` was `deduplicated` — a key the relay
+   never sends, so pydantic dropped it and only the 200-status fallback kept it
+   correct; the fake emitted the SDK's spelling too, so the suite could not see the
+   drift. A fake that speaks the client's dialect only ever confirms the client's
+   assumptions.
+4a. **One signal = one COMPLETE portfolio state.** `payload` (≤64 KB, 256 KiB sealed;
+   413 is terminal) carries the whole book — the shipped `portfolio_rebalance/1.0`
+   schema is an unbounded `positions` list for one signal date, ~900 positions in the
+   cap. There is NO batch publish endpoint: `POST /v1/signals` binds one signal, and
+   `publish_many` is a client-side loop — N requests, N sequences, **not atomic**.
+   Never document it as a way to send a portfolio: the cursor commits per signal, so a
+   split portfolio can be durably half-applied with no completeness marker. Receiving
+   mirrors this — every transport delivers one signal per message and `page_size` is
+   transport paging, never a batch-receive API.
 5. **Webhook verification**: HMAC-SHA256 over `"{timestamp}." + raw_body` with the
    endpoint secret, `hmac.compare_digest`, reject |now − ts| > 5 min, injectable clock.
    Verify raw received bytes — never re-serialize.
@@ -50,7 +65,9 @@ before claiming any task complete. Run them fresh.
    frozen pydantic v2 models; SemVer; CHANGELOG kept current.
 7. **Public repo hygiene:** no business plans, internal strategy, credentials, or
    Azure resource details in this repo. Examples use placeholder keys and
-   `https://relay-api.multiedge.ai`.
+   `https://relay-api.multiedge.ai`. Placeholder API keys are **`mesk_`** — the only
+   prefix the relay accepts; `tests/test_docs_contract.py` fails the build on any
+   other, because a wrong placeholder makes every copy-pasted quickstart 401.
 8. **Latest supported versions.** Dependencies and the Python matrix ride the newest
    released versions the toolchain supports; verify ceilings, never guess, and record
    any forced pin with its reason here.
