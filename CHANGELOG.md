@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-31
+
+No library changes — this release exists to prove the publishing pipeline.
+
+### Changed
+
+- **Releases are now published by CI via PyPI trusted publishing.** Every prior
+  version reached PyPI by hand: the `Release` workflow had been correct since
+  `v0.5.0`, but no trusted publisher was ever registered on PyPI, so all four runs
+  died at `invalid-publisher` and the artifacts were uploaded from a laptop
+  instead. Registering the publisher fixed the exchange; the workflow now also
+  pins its actions (the OIDC-holding step no longer tracks a branch pointer),
+  refuses a tag that disagrees with the packaged version, and deploys from a
+  `pypi` environment restricted to `v*` tags. The release procedure is documented
+  in `CONTRIBUTING.md` — no API token exists, and manual uploads are forbidden.
+
 ## [0.7.0] - 2026-08-30
 
 ### Fixed
