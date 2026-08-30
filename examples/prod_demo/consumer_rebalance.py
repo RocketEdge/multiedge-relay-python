@@ -11,8 +11,8 @@ and no duplicates. That resume is the demo's headline proof.
 
 Run:
     MULTIEDGE_API_KEY=mesk_...   # the subscriber:<client_id> key
-    python consumer_rebalance.py --strategy-id <ULID>
-    python consumer_rebalance.py --strategy-id <ULID> --catchup-only --out received.csv
+    uv run python consumer_rebalance.py --strategy-id <ULID>
+    uv run python consumer_rebalance.py --strategy-id <ULID> --catchup-only --out received.csv
 """
 
 from __future__ import annotations
@@ -23,12 +23,28 @@ import os
 import sys
 from pathlib import Path
 
-from multiedge_relay import (
-    FileCursorStore,
-    ReceivedSignal,
-    SignalMeta,
-    SignalSubscriber,
-)
+try:
+    from multiedge_relay import (
+        FileCursorStore,
+        ReceivedSignal,
+        SignalMeta,
+        SignalSubscriber,
+    )
+except ModuleNotFoundError as exc:  # the SDK is missing from THIS interpreter
+    # A bare ``python demo.py`` resolves to the interpreter on PATH, not to the
+    # project environment — naming that interpreter, and the uv command that builds
+    # and uses the right one, is the whole fix.
+    raise SystemExit(
+        f"{exc}: this demo needs its dependencies installed in the interpreter "
+        f"running it ({sys.executable}).\n"
+        "\n"
+        "Run it with uv from anywhere in the repo — uv creates and syncs the "
+        "environment for you:\n"
+        f"  uv run python {os.path.basename(sys.argv[0])} <same arguments>\n"
+        "\n"
+        "Not using uv? Install the SDK into this interpreter "
+        "(pip install multiedge-relay), or activate the environment that has it."
+    ) from exc
 
 DEFAULT_BASE_URL = "https://relay-api.multiedge.ai"
 DEMO_STATE_ROOT = Path(__file__).parent / ".demo"

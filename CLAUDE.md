@@ -124,5 +124,11 @@ examples/prod_demo/    two-terminal live demo (README § "Two-Terminal Live Demo
                        (control-plane bootstrap), producer_rebalance (paced,
                        idempotent client_signal_id "<strategy_id>:<signal_date>"),
                        consumer_rebalance (poll subscriber; state under
-                       examples/prod_demo/.demo/, never ~/.multiedge/)
+                       examples/prod_demo/.demo/, never ~/.multiedge/).
+                       The demo is documented and run as `uv run python <script>` (no
+                       venv to activate, in either terminal), and every third-party
+                       import here is guarded: a missing dep exits with the module,
+                       the interpreter (sys.executable) and that same uv command — an
+                       operator mid-demo must never be handed a raw ImportError
+                       traceback (tests/test_prod_demo.py pins the message)
 ```

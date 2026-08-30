@@ -344,16 +344,24 @@ The commands below are PowerShell (Windows); on macOS/Linux replace
 
 ```powershell
 git clone https://github.com/RocketEdge/multiedge-relay-python
-cd multiedge-relay-python
-uv venv                                   # or: python -m venv .venv
-uv pip install .                          # or: pip install multiedge-relay
-cd examples\prod_demo
+cd multiedge-relay-python\examples\prod_demo
 ```
+
+That is the whole install step. Every command below runs through
+[`uv`](https://docs.astral.sh/uv/): `uv run` finds the project root from any
+subdirectory, creates and syncs the environment from `uv.lock` on first use, and runs
+the script inside it — so there is no virtual environment to build or activate, in
+either terminal.
+
+Without `uv`, build the environment once (`python -m venv .venv`, activate it,
+`pip install multiedge-relay`) and drop the `uv run` prefix from every command. A bare
+`python demo.py` in an unactivated shell runs the interpreter on `PATH`, where the SDK
+is absent — the scripts stop with an explicit message naming that interpreter.
 
 ### 2. Generate the demo instruction feed
 
 ```powershell
-python generate_demo_csv.py --seed 42 --out demo_rebalance_signals.csv
+uv run python generate_demo_csv.py --seed 42 --out demo_rebalance_signals.csv
 ```
 
 The file has the shape of a real model-portfolio feed —
@@ -370,7 +378,7 @@ tenant's ledger.
 
 ```powershell
 $env:MULTIEDGE_ADMIN_KEY = "mesk_your_tenant_admin_key"
-python setup_demo.py
+uv run python setup_demo.py
 ```
 
 This creates strategy `demo-rebalance` (pinned to the relay's default
@@ -391,7 +399,7 @@ Reruns are safe: the strategy and client are reused; keys are minted fresh
 
 ```powershell
 $env:MULTIEDGE_API_KEY = "mesk_the_SUBSCRIBER_key"
-python consumer_rebalance.py --strategy-id 01J...ULID
+uv run python consumer_rebalance.py --strategy-id 01J...ULID
 ```
 
 It catches up on anything already published, then polls live every 2 s. Leave it
@@ -401,7 +409,7 @@ running.
 
 ```powershell
 $env:MULTIEDGE_API_KEY = "mesk_the_PUBLISHER_key"
-python producer_rebalance.py demo_rebalance_signals.csv --strategy-id 01J...ULID --pace 3 --limit 40
+uv run python producer_rebalance.py demo_rebalance_signals.csv --strategy-id 01J...ULID --pace 3 --limit 40
 ```
 
 One signal date is published every 3 seconds (`--limit 40` keeps the first demo
@@ -423,7 +431,7 @@ poll interval:
   reports `(deduplicated)` — the deterministic
   `client_signal_id = "<strategy_id>:<signal_date>"` means the relay returns the
   original acks instead of storing copies.
-- **Reconstruction:** `python consumer_rebalance.py --strategy-id 01J...ULID
+- **Reconstruction:** `uv run python consumer_rebalance.py --strategy-id 01J...ULID
   --catchup-only --out received.csv` rebuilds the instruction rows from the
   relay's log (the schema carries ticker, action, and pre-trade weight; the two
   derived delta columns are not transported).

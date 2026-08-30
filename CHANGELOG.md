@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The two-terminal demo no longer dies with a bare `ModuleNotFoundError`.** The
+  README's install step created a virtual environment but never activated it, so a
+  copy-pasted `python consumer_rebalance.py` ran under whatever interpreter was on
+  `PATH` — where the SDK is not installed. Every demo command is now prefixed with
+  `uv run` (README and script usage docstrings), which builds and uses the right
+  environment itself and leaves nothing to activate per terminal; the install step is
+  just the clone. `consumer_rebalance.py`, `producer_rebalance.py`, and
+  `setup_demo.py` replace the import traceback with a message naming the missing
+  module, the interpreter that could not find it, and that `uv run` command.
+
 ## [0.5.0] - 2026-08-29
 
 ### Changed

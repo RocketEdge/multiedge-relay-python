@@ -11,7 +11,7 @@ Both keys are printed EXACTLY ONCE — the relay stores only their hashes and ca
 never re-reveal them. Copy them before closing the terminal.
 
 Run:
-    MULTIEDGE_ADMIN_KEY=mesk_... python setup_demo.py
+    MULTIEDGE_ADMIN_KEY=mesk_... uv run python setup_demo.py
 """
 
 from __future__ import annotations
@@ -22,7 +22,23 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
+try:
+    import httpx
+except ModuleNotFoundError as exc:  # httpx is missing from THIS interpreter
+    # A bare ``python demo.py`` resolves to the interpreter on PATH, not to the
+    # project environment — naming that interpreter, and the uv command that builds
+    # and uses the right one, is the whole fix.
+    raise SystemExit(
+        f"{exc}: this demo needs its dependencies installed in the interpreter "
+        f"running it ({sys.executable}).\n"
+        "\n"
+        "Run it with uv from anywhere in the repo — uv creates and syncs the "
+        "environment for you:\n"
+        f"  uv run python {os.path.basename(sys.argv[0])} <same arguments>\n"
+        "\n"
+        "Not using uv? Install the SDK into this interpreter "
+        "(pip install multiedge-relay), or activate the environment that has it."
+    ) from exc
 
 DEFAULT_BASE_URL = "https://relay-api.multiedge.ai"
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import importlib
+import subprocess
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -326,3 +327,56 @@ def test_bootstrap_reuses_existing_strategy_and_client(
         )
     assert result.strategy_id == "01STRAT"  # recovered via GET after the 409
     assert result.client_id == "01CLIENT"  # reused by display_name
+
+
+# ------------------------------------------------- missing-dependency guard
+
+# Running a demo script with a bare ``python`` resolves to the interpreter on PATH,
+# where the SDK is absent — the README documents ``uv run python <script>`` precisely
+# so no environment has to be built or activated by hand. The scripts must point at
+# that same command instead of dumping an ImportError traceback at an operator who is
+# mid-demo.
+_BLOCK_AND_RUN = """\
+import runpy
+import sys
+from importlib.abc import MetaPathFinder
+
+
+class _Blocked(MetaPathFinder):
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == self.name or fullname.startswith(self.name + "."):
+            raise ModuleNotFoundError(f"No module named {fullname!r}", name=fullname)
+        return None
+
+
+blocked, script = sys.argv[1], sys.argv[2]
+sys.meta_path.insert(0, _Blocked(blocked))
+sys.argv = [script, "--help"]
+runpy.run_path(script, run_name="__main__")
+"""
+
+
+@pytest.mark.parametrize(
+    ("script", "blocked"),
+    [
+        ("consumer_rebalance.py", "multiedge_relay"),
+        ("producer_rebalance.py", "multiedge_relay"),
+        ("setup_demo.py", "httpx"),
+    ],
+)
+def test_demo_script_explains_a_missing_dependency(script: str, blocked: str) -> None:
+    completed = subprocess.run(
+        [sys.executable, "-c", _BLOCK_AND_RUN, blocked, str(PROD_DEMO / script)],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0
+    message = completed.stderr
+    assert "Traceback" not in message, "the guard must replace the traceback, not follow it"
+    assert blocked in message
+    assert sys.executable in message  # names the interpreter actually being used
+    # The recommended fix is the documented one: uv builds the environment itself.
+    assert f"uv run python {script}" in message

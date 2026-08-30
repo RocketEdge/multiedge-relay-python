@@ -12,7 +12,7 @@ Columns:
     TradeWeightDelta, ImpliedPostTradeWeightAtSignalClose
 
 Run:
-    python generate_demo_csv.py --seed 42 --out demo_rebalance_signals.csv
+    uv run python generate_demo_csv.py --seed 42 --out demo_rebalance_signals.csv
 """
 
 from __future__ import annotations
