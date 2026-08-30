@@ -16,6 +16,7 @@ Contract:
 
 from __future__ import annotations
 
+import warnings
 from datetime import datetime
 from typing import Any, Literal
 
@@ -27,8 +28,16 @@ class Signal(BaseModel):
 
     Attributes:
         strategy_id: The strategy stream this signal belongs to.
-        payload: Arbitrary JSON-serializable signal content. The relay carries it
-            opaquely; it never interprets or executes it.
+        payload: Arbitrary JSON-serializable signal content, at most 64 KB (256 KiB
+            sealed); the relay refuses more with HTTP 413, which is terminal. The
+            relay carries it opaquely and never interprets or executes it, but it
+            IS validated against the strategy's registered JSON Schema.
+
+            By convention one signal carries one COMPLETE portfolio state — the
+            shipped ``portfolio_rebalance/1.0`` schema is exactly that, an unbounded
+            ``positions`` list for one signal date. This is why there is no batch
+            publish endpoint: the batching lives inside the payload, not across
+            requests. 64 KB is roughly 900 positions.
         client_signal_id: Publisher-side idempotency key. When ``None``, the
             publisher assigns a ULID before sending, so retries and DLQ resends are
             deduplicated by the relay.
@@ -56,9 +65,11 @@ class SignalAck(BaseModel):
         client_signal_id: Echo of the idempotency key the publish carried.
         sequence: Position in the strategy's sequenced log (ordering truth).
         accepted_at: Relay-side acceptance timestamp (UTC).
-        deduplicated: ``True`` when the relay had already accepted a signal with the
+        duplicate: ``True`` when the relay had already accepted a signal with the
             same ``client_signal_id`` and returned the original ack (HTTP 200
             instead of 201) — the retry was safe and nothing was double-published.
+            The name mirrors the relay's own wire field; a model field the relay
+            never sends can only ever be populated by accident.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -67,7 +78,25 @@ class SignalAck(BaseModel):
     client_signal_id: str
     sequence: int
     accepted_at: datetime
-    deduplicated: bool = False
+    duplicate: bool = False
+
+    @property
+    def deduplicated(self) -> bool:
+        """Deprecated alias for :attr:`duplicate`; removed in 1.0.
+
+        Returns:
+            The value of :attr:`duplicate`.
+
+        Warns:
+            DeprecationWarning: Always. Migrate to ``ack.duplicate``.
+        """
+        warnings.warn(
+            "SignalAck.deduplicated is deprecated; use SignalAck.duplicate, which "
+            "carries the relay's own wire field name. Removed in 1.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.duplicate
 
 
 class ReceivedSignal(BaseModel):
@@ -82,7 +111,11 @@ class ReceivedSignal(BaseModel):
             envelope carries it. Sealed mode requires it: it is an input to the
             sealed envelope's AAD identity binding.
         published_at: Relay-side acceptance timestamp (UTC).
-        payload: The publisher's opaque signal content.
+        payload: The publisher's opaque signal content. By convention one signal
+            carries one COMPLETE portfolio state (see ``Signal.payload``).
+        correlation_id: Echo of the publisher's tracing identifier. The relay emits
+            it on every read path — catch-up, webhook and live — and entitlement
+            field policies filter only ``payload``, so it is never stripped.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -93,6 +126,7 @@ class ReceivedSignal(BaseModel):
     published_at: datetime
     payload: dict[str, Any]
     client_signal_id: str | None = None
+    correlation_id: str | None = None
 
 
 class SignalMeta(BaseModel):

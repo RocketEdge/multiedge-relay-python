@@ -13,7 +13,7 @@ Contract:
       is exhausted. A server ``Retry-After`` hint overrides the computed backoff.
     * Any other status -> fail fast (one attempt) to the DLQ.
     * HTTP 200 (vs 201) means the relay deduplicated by ``client_signal_id`` and
-      returned the original ack: ``SignalAck.deduplicated`` is ``True``.
+      returned the original ack: ``SignalAck.duplicate`` is ``True``.
 """
 
 from __future__ import annotations
@@ -72,12 +72,14 @@ def prepare_signal(signal: Signal | dict[str, Any], sealer: Sealer | None = None
 def ack_from_response(response: httpx.Response) -> SignalAck:
     """Parse an accept response (200/201) into a ``SignalAck``.
 
-    A 200 status means the relay had already accepted this ``client_signal_id`` and
-    returned the original ack — ``deduplicated`` is forced ``True`` in that case.
+    The relay states the outcome twice — the body's ``duplicate`` field and the status
+    code (200 for a replayed ack, 201 for a fresh publish) — and the two cannot
+    disagree. The body is authoritative; the status is kept as a belt-and-braces
+    upgrade so a relay that ever omitted the field still yields a correct flag.
     """
     ack = SignalAck.model_validate(response.json())
-    if response.status_code == 200 and not ack.deduplicated:
-        ack = ack.model_copy(update={"deduplicated": True})
+    if response.status_code == 200 and not ack.duplicate:
+        ack = ack.model_copy(update={"duplicate": True})
     return ack
 
 
@@ -170,7 +172,7 @@ class SignalPublisher:
                 a ULID so retries are idempotent.
 
         Returns:
-            The relay's ``SignalAck`` (``deduplicated=True`` when the relay had
+            The relay's ``SignalAck`` (``duplicate=True`` when the relay had
             already seen this ``client_signal_id``).
 
         Raises:

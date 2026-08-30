@@ -56,7 +56,7 @@ def test_publish_returns_ack_and_auto_ulid(relay: FakeRelay, dlq_root: Path) -> 
         ack = publisher.publish(Signal(strategy_id="s1", payload={"a": 1}))
     assert isinstance(ack, SignalAck)
     assert ack.sequence == 1
-    assert ack.deduplicated is False
+    assert ack.duplicate is False
     assert len(ack.client_signal_id) == 26  # auto-generated ULID
     assert relay.signals["s1"][0].payload == {"a": 1}
 
@@ -67,17 +67,42 @@ def test_publish_accepts_plain_dict(relay: FakeRelay, dlq_root: Path) -> None:
     assert ack.sequence == 1
 
 
-def test_duplicate_client_signal_id_returns_deduplicated_ack(
+def test_duplicate_client_signal_id_returns_the_original_ack(
     relay: FakeRelay, dlq_root: Path
 ) -> None:
     sig = Signal(strategy_id="s1", payload={"a": 1}, client_signal_id="fixed-id")
     with make_publisher(dlq_root, transport=SyncASGITransport(relay.app)) as publisher:
         first = publisher.publish(sig)
         second = publisher.publish(sig)
-    assert first.deduplicated is False
-    assert second.deduplicated is True
+    assert first.duplicate is False
+    assert second.duplicate is True
     assert second.sequence == first.sequence
     assert len(relay.signals["s1"]) == 1
+
+
+@respx.mock
+def test_duplicate_flag_is_read_from_the_body_not_only_the_status(dlq_root: Path) -> None:
+    """A 201 whose body says ``duplicate`` must be believed.
+
+    Regression guard for the wire-name drift: the SDK read a field the relay never
+    sends, so the flag survived only because a 200 status forced it. Serving the
+    truth on a 201 isolates the body as the source.
+    """
+    respx.post(f"{BASE}/v1/signals").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "signal_id": "sig_1",
+                "client_signal_id": "c1",
+                "sequence": 3,
+                "accepted_at": "2026-08-30T00:00:00+00:00",
+                "duplicate": True,
+            },
+        )
+    )
+    with make_publisher(dlq_root) as publisher:
+        ack = publisher.publish(Signal(strategy_id="s1", payload={"a": 1}))
+    assert ack.duplicate is True
 
 
 def test_transient_failure_retries_then_succeeds(relay: FakeRelay, dlq_root: Path) -> None:

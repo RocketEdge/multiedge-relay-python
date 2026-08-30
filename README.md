@@ -204,7 +204,7 @@ A publish can end in exactly three ways — all of them explicit:
 
 | Outcome | What you get |
 |---|---|
-| Accepted | `SignalAck` (with `deduplicated=True` if the relay had already seen this `client_signal_id`) |
+| Accepted | `SignalAck` (with `duplicate=True` if the relay had already seen this `client_signal_id`) |
 | Rejected, not retryable | `AuthError` (401/403) or `ValidationRejected` (422/413) — raised immediately, never retried |
 | Retries exhausted | Signal appended to the disk DLQ, then `PublishFailed` raised carrying `dlq_path` |
 

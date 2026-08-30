@@ -41,7 +41,7 @@ before claiming any task complete. Run them fresh.
    buffer, REST-fills the range, then drains in order. Ordering truth is the relay
    `sequence` — never the transport's own sequence IDs.
 4. **Idempotent publish.** `client_signal_id` auto-ULID per signal; the relay returns
-   the original ack for duplicates (`SignalAck.deduplicated=True`) — retries are safe.
+   the original ack for duplicates (`SignalAck.duplicate=True`) — retries are safe.
 5. **Webhook verification**: HMAC-SHA256 over `"{timestamp}." + raw_body` with the
    endpoint secret, `hmac.compare_digest`, reject |now − ts| > 5 min, injectable clock.
    Verify raw received bytes — never re-serialize.

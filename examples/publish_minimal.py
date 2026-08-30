@@ -47,7 +47,7 @@ def main() -> None:
     with SignalPublisher(api_key=api_key) as publisher:
         ack = publisher.publish(Signal(strategy_id="example-strategy", payload=rebalance_payload()))
     print(f"accepted: signal_id={ack.signal_id} sequence={ack.sequence}")
-    if ack.deduplicated:
+    if ack.duplicate:
         print("(the relay had already seen this client_signal_id — nothing double-published)")
 
 

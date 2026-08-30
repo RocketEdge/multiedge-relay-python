@@ -189,10 +189,10 @@ def test_producer_consumer_round_trip_and_idempotent_rerun(
 
     first_acks = publish_all()
     assert len(first_acks) == len(signals)
-    assert all(not ack.deduplicated for ack in first_acks)
+    assert all(not ack.duplicate for ack in first_acks)
 
     rerun_acks = publish_all()  # deterministic ids make the rerun a no-op
-    assert all(ack.deduplicated for ack in rerun_acks)
+    assert all(ack.duplicate for ack in rerun_acks)
     assert [a.sequence for a in rerun_acks] == [a.sequence for a in first_acks]
 
     received: list[ReceivedSignal] = []

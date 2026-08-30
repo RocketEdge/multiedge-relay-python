@@ -35,7 +35,37 @@ def test_signal_ack_defaults() -> None:
         sequence=7,
         accepted_at=datetime.now(UTC),
     )
-    assert ack.deduplicated is False
+    assert ack.duplicate is False
+
+
+def test_signal_ack_reads_the_relays_own_wire_field() -> None:
+    """The relay sends ``duplicate``; parsing must read THAT, not a local synonym.
+
+    Regression: the model field was ``deduplicated``, a name the relay never sends,
+    so the flag arrived only because the publisher forced it from the HTTP 200 status.
+    """
+    ack = SignalAck.model_validate(
+        {
+            "signal_id": "sig_1",
+            "client_signal_id": "c1",
+            "sequence": 7,
+            "accepted_at": "2026-08-30T00:00:00Z",
+            "duplicate": True,
+        }
+    )
+    assert ack.duplicate is True
+
+
+def test_deduplicated_is_a_deprecated_alias() -> None:
+    ack = SignalAck(
+        signal_id="sig_1",
+        client_signal_id="c1",
+        sequence=7,
+        accepted_at=datetime.now(UTC),
+        duplicate=True,
+    )
+    with pytest.warns(DeprecationWarning, match="duplicate"):
+        assert ack.deduplicated is True
 
 
 def test_received_signal_fields() -> None:
@@ -48,6 +78,22 @@ def test_received_signal_fields() -> None:
     )
     assert rs.sequence == 3
     assert rs.payload == {"x": "y"}
+    assert rs.correlation_id is None
+
+
+def test_received_signal_carries_the_envelopes_correlation_id() -> None:
+    """The relay emits ``correlation_id`` on both read paths; dropping it loses tracing."""
+    rs = ReceivedSignal.model_validate(
+        {
+            "sequence": 3,
+            "signal_id": "sig_3",
+            "strategy_id": "s1",
+            "published_at": "2026-08-30T00:00:00Z",
+            "payload": {"x": "y"},
+            "correlation_id": "corr_7f3a",
+        }
+    )
+    assert rs.correlation_id == "corr_7f3a"
 
 
 def test_signal_meta_source_literal() -> None:

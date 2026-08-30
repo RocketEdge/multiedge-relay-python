@@ -51,8 +51,8 @@ async def test_async_dedupe(relay: FakeRelay, dlq_root: Path) -> None:
     async with make_publisher(relay, dlq_root) as publisher:
         first = await publisher.publish(sig)
         second = await publisher.publish(sig)
-    assert first.deduplicated is False
-    assert second.deduplicated is True
+    assert first.duplicate is False
+    assert second.duplicate is True
 
 
 async def test_async_retry_then_success(relay: FakeRelay, dlq_root: Path) -> None:

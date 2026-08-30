@@ -38,24 +38,34 @@ class StoredSignal:
     client_signal_id: str
     published_at: datetime
     payload: dict[str, Any]
+    correlation_id: str | None = None
 
     def as_received(self) -> dict[str, Any]:
+        """Project the relay's SignalEnvelope field-for-field, wire names included."""
         return {
             "sequence": self.sequence,
             "signal_id": self.signal_id,
             "strategy_id": self.strategy_id,
             "client_signal_id": self.client_signal_id,
             "published_at": self.published_at.isoformat(),
+            "correlation_id": self.correlation_id,
             "payload": self.payload,
         }
 
-    def as_ack(self, *, deduplicated: bool) -> dict[str, Any]:
+    def as_ack(self, *, duplicate: bool) -> dict[str, Any]:
+        """Project the relay's PublishAck.
+
+        The dedup flag is named ``duplicate`` because that is what the relay sends
+        (PublishAck.cs). The fake once emitted the SDK's own name instead, which made
+        a wire-contract drift invisible to the entire suite — a fake that speaks the
+        client's dialect can only ever confirm the client's assumptions.
+        """
         return {
             "signal_id": self.signal_id,
             "client_signal_id": self.client_signal_id,
             "sequence": self.sequence,
             "accepted_at": self.published_at.isoformat(),
-            "deduplicated": deduplicated,
+            "duplicate": duplicate,
         }
 
 
@@ -97,7 +107,11 @@ class FakeRelay:
 
     # ------------------------------------------------------------------ store
     def _store(
-        self, strategy_id: str, payload: dict[str, Any], client_signal_id: str | None
+        self,
+        strategy_id: str,
+        payload: dict[str, Any],
+        client_signal_id: str | None,
+        correlation_id: str | None = None,
     ) -> StoredSignal:
         with self._lock:
             seq = self._seq.get(strategy_id, 0) + 1
@@ -110,6 +124,7 @@ class FakeRelay:
                 client_signal_id=client_signal_id or f"auto_{n:06d}",
                 published_at=datetime.now(UTC),
                 payload=payload,
+                correlation_id=correlation_id,
             )
             self.signals.setdefault(strategy_id, []).append(stored)
             if client_signal_id is not None:
@@ -142,9 +157,9 @@ class FakeRelay:
             if client_signal_id:
                 existing = self._by_client_id.get((strategy_id, client_signal_id))
                 if existing is not None:
-                    return JSONResponse(existing.as_ack(deduplicated=True), status_code=200)
-            stored = self._store(strategy_id, payload, client_signal_id)
-            return JSONResponse(stored.as_ack(deduplicated=False), status_code=201)
+                    return JSONResponse(existing.as_ack(duplicate=True), status_code=200)
+            stored = self._store(strategy_id, payload, client_signal_id, body.get("correlation_id"))
+            return JSONResponse(stored.as_ack(duplicate=False), status_code=201)
 
         @app.get("/v1/signals")
         async def list_signals(

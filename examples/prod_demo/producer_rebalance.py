@@ -8,7 +8,7 @@ consumer terminal.
 
 Every signal carries the deterministic ``client_signal_id``
 ``"<strategy_id>:<signal_date>"``, so re-running the producer is idempotent: the
-relay answers with the original ack (``deduplicated=True``) instead of storing a
+relay answers with the original ack (``duplicate=True``) instead of storing a
 second copy.
 
 Run:
@@ -116,7 +116,7 @@ def publish_signals(
     Returns:
         One ack per signal, in publish order. A signal the relay had already
         accepted (same ``client_signal_id``) yields its original ack with
-        ``deduplicated=True``.
+        ``duplicate=True``.
 
     Raises:
         PublishFailed: After retries are exhausted; the signal is preserved in
@@ -132,7 +132,7 @@ def publish_signals(
         assert isinstance(positions, list)
         log(
             f"{signal.payload['signal_date']}: seq={ack.sequence} "
-            f"positions={len(positions)}" + (" (deduplicated)" if ack.deduplicated else "")
+            f"positions={len(positions)}" + (" (deduplicated)" if ack.duplicate else "")
         )
     return acks
 
@@ -163,8 +163,8 @@ def main() -> None:
     ) as publisher:
         acks = publish_signals(publisher, signals, pace=args.pace)
 
-    deduplicated = sum(1 for ack in acks if ack.deduplicated)
-    print(f"published {len(acks)} signal(s) ({deduplicated} deduplicated by the relay)")
+    duplicates = sum(1 for ack in acks if ack.duplicate)
+    print(f"published {len(acks)} signal(s) ({duplicates} deduplicated by the relay)")
 
 
 if __name__ == "__main__":

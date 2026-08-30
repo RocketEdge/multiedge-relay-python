@@ -76,7 +76,7 @@ def main() -> None:
             ack = publisher.publish(signal)
             print(
                 f"{signal.payload['signal_date']}: sequence={ack.sequence}"
-                + (" (deduplicated)" if ack.deduplicated else "")
+                + (" (deduplicated)" if ack.duplicate else "")
             )
     print(f"published {len(signals)} rebalance signal(s)")
 
