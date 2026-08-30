@@ -6,7 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-30
+
 ### Fixed
+
+- **The exactly-once ledger no longer balloons on SQLite 3.51+.** `prune()` and
+  `commit()` drove `PRAGMA incremental_vacuum` with a single
+  `execute(...).fetchall()`. The pragma reclaims one page per step, and through
+  SQLite 3.50 it emitted a row per reclaimed page, so `fetchall()` incidentally
+  stepped it to exhaustion. SQLite 3.51+ returns no rows, `fetchall()` stops
+  immediately, and each call freed exactly one page — so a long-running
+  subscriber's `state.db` grew without bound, the very thing
+  `auto_vacuum=INCREMENTAL` was chosen to prevent. An explicit page count does not
+  help (`incremental_vacuum(N)` still yields after one page). Both call sites now
+  share a helper that drains the freelist and stops on the first iteration that
+  frees nothing. Surfaced by CI on Python 3.11, which bundles SQLite 3.53.1 while
+  3.12-3.14 bundle 3.50.4.
 
 - **The two-terminal demo no longer dies with a bare `ModuleNotFoundError`.** The
   README's install step created a virtual environment but never activated it, so a
@@ -17,8 +32,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   just the clone. `consumer_rebalance.py`, `producer_rebalance.py`, and
   `setup_demo.py` replace the import traceback with a message naming the missing
   module, the interpreter that could not find it, and that `uv run` command.
-
-## [0.5.0] - 2026-08-29
 
 ### Changed
 
