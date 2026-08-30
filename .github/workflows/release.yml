@@ -8,15 +8,26 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # `version` in pyproject.toml is static and hand-edited, so a tag can disagree
+      # with what actually gets built. Without this the mismatch only surfaces at
+      # upload time, as a confusing "file already exists" for the PREVIOUS version.
+      - name: Tag must match the packaged version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(python3 -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          echo "tag=$tag pyproject=$pkg"
+          [ "$tag" = "$pkg" ] || { echo "::error::tag v$tag != pyproject version $pkg"; exit 1; }
+
+      # Exact tag, not @v10: astral-sh stopped publishing bare major aliases after v7.
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Build sdist and wheel
         run: uv build
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -24,14 +35,20 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    environment: pypi
+    # The build job stays separate so `id-token: write` is never in scope while
+    # repository code runs; this job only downloads an artifact and uploads it.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/multiedge-relay
     permissions:
       id-token: write # PyPI trusted publishing (OIDC) — no API token stored
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
 
+      # Pinned to a tag, not the release/v1 branch pointer: this step holds the
+      # OIDC token. Attestations are on by default under trusted publishing.
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@v1.14.2
