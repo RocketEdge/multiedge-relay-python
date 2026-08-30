@@ -17,8 +17,10 @@ jobs:
         include:
           - os: windows-latest
             python-version: "3.14"
-          # Core must stay importable and green WITHOUT the crypto extra —
-          # proves sealed mode never became a hard dependency.
+          # Adds `core-only` to the EXISTING ubuntu/3.14 job rather than creating a
+          # sixth one — an include whose matrix keys match a combination merges into
+          # it. That job therefore runs the suite twice: once with every extra, then
+          # again without the crypto one (final step).
           - os: ubuntu-latest
             python-version: "3.14"
             core-only: true
@@ -34,10 +36,6 @@ jobs:
       - name: Sync dependencies
         run: uv sync
 
-      - name: Remove crypto dependency (core-only job)
-        if: matrix.core-only
-        run: uv pip uninstall cryptography
-
       - name: Lint (ruff)
         run: uv run ruff check .
 
@@ -49,3 +47,16 @@ jobs:
 
       - name: Tests
         run: uv run pytest -m "not integration" --cov=multiedge_relay --cov-report=term-missing
+
+      # Proves sealed mode never became a hard dependency: core must import and the
+      # suite must stay green with `cryptography` genuinely absent (sealed tests
+      # importorskip out, so the passed count DROPS — that drop is the evidence the
+      # check ran). --no-sync is load-bearing: `cryptography` is in the dev GROUP, so
+      # a plain `uv run` re-syncs it back before the first assertion and the check
+      # silently proves nothing. Runs last so this job also covers the full extras.
+      - name: Core stays green without the crypto extra
+        if: matrix.core-only
+        run: |
+          uv pip uninstall cryptography
+          uv run --no-sync python -c "import multiedge_relay; print(multiedge_relay.__version__)"
+          uv run --no-sync pytest -m "not integration" -q
