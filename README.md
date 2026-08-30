@@ -4,7 +4,7 @@ Official Python SDK for MultiEdge Signal Relay — auditable signal-distribution
 
 [![PyPI](https://img.shields.io/pypi/v/multiedge-relay.svg)](https://pypi.org/project/multiedge-relay/)
 [![Python](https://img.shields.io/pypi/pyversions/multiedge-relay.svg)](https://pypi.org/project/multiedge-relay/)
-[![CI](https://img.shields.io/badge/CI-passing-brightgreen)](https://github.com/multiedge-ai/multiedge-relay-python/actions)
+[![CI](https://img.shields.io/badge/CI-passing-brightgreen)](https://github.com/RocketEdge/multiedge-relay-python/actions)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 ## Table of Contents
@@ -343,7 +343,7 @@ The commands below are PowerShell (Windows); on macOS/Linux replace
 ### 1. Install
 
 ```powershell
-git clone https://github.com/multiedge-ai/multiedge-relay-python
+git clone https://github.com/RocketEdge/multiedge-relay-python
 cd multiedge-relay-python
 uv venv                                   # or: python -m venv .venv
 uv pip install .                          # or: pip install multiedge-relay

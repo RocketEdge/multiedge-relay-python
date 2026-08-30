@@ -36,9 +36,9 @@ sealed = ["cryptography>=47"]
 
 [project.urls]
 Homepage = "https://multiedge.ai"
-Documentation = "https://github.com/multiedge-ai/multiedge-relay-python#readme"
-Repository = "https://github.com/multiedge-ai/multiedge-relay-python"
-Changelog = "https://github.com/multiedge-ai/multiedge-relay-python/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/RocketEdge/multiedge-relay-python#readme"
+Repository = "https://github.com/RocketEdge/multiedge-relay-python"
+Changelog = "https://github.com/RocketEdge/multiedge-relay-python/blob/main/CHANGELOG.md"
 
 [project.scripts]
 multiedge = "multiedge_relay.cli:main"
