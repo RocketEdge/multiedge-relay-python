@@ -42,6 +42,32 @@ class ValidationRejected(MultiEdgeError):
     """
 
 
+class IdempotencyConflict(MultiEdgeError):
+    """The relay refused a resend: the ``client_signal_id`` already names a signal
+    with a DIFFERENT payload (HTTP 409 ``client_signal_id_conflict``, relay ADR 0015).
+
+    This is a mis-sent correction, not a retry: a byte-identical retry re-acks
+    200 with ``duplicate=True``, but a changed payload under a reused id would
+    otherwise be silently discarded. Never retried and never spilled to the DLQ —
+    resending the same bytes can never succeed. Publish the correction under a
+    NEW id using the revision-suffix convention (``"<strategy>:<date>:r2"``).
+
+    Attributes:
+        signal_id: Relay id of the ORIGINAL signal that owns the reused key.
+        sequence: Sequence of that original signal.
+    """
+
+    def __init__(self, signal_id: str, sequence: int, hint: str | None = None) -> None:
+        self.signal_id = signal_id
+        self.sequence = sequence
+        suffix = f" {hint}" if hint else ""
+        super().__init__(
+            f"client_signal_id already names signal {signal_id} (sequence {sequence}) "
+            f'with a different payload; publish the correction under a new id, e.g. ":r2".'
+            f"{suffix}"
+        )
+
+
 class PublishFailed(MultiEdgeError):
     """A publish did not succeed after all retry attempts.
 

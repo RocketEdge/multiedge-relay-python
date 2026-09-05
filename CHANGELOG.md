@@ -6,6 +6,46 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-05
+
+Companion release to the relay's `portfolio_rebalance/1.1` deployment (relay
+ADR 0015), prompted by the first external publisher integration.
+
+### Added
+
+- **`Signal.schema_version`** — the informational envelope label finally has a
+  model field, so `Signal(schema_version="portfolio_rebalance/1.1")` reaches
+  the wire instead of being silently dropped by pydantic.
+- **`IdempotencyConflict`** — the relay now answers `409
+  client_signal_id_conflict` when a CHANGED payload is resent under an
+  already-used `client_signal_id` (previously it silently replayed the original
+  ack, discarding the correction). The SDK raises this typed exception carrying
+  the original `signal_id`/`sequence`; it is never retried and **never spilled
+  to the DLQ** (resending the same bytes can never succeed — a DLQ entry would
+  409 forever on `dlq resend`). Byte-identical retries still re-ack `200` with
+  `duplicate=True`. Other 409 bodies (e.g. `strategy_archived`) keep the
+  fail-fast `PublishFailed` + DLQ path.
+- **Corrections documented** — the `":r2"` revision-suffix convention (new id,
+  same `signal_date`, full corrected book; consumers apply the highest sequence
+  per `signal_date`), in the README and the relay's `/docs/walkthrough`.
+
+### Changed
+
+- **`portfolio_rebalance/1.1` is the documented standard schema**: `action` now
+  includes `HOLD` (state an unchanged position affirmatively at its unchanged
+  target weight), and the docs state explicitly that a non-empty positions list
+  is the COMPLETE post-trade portfolio — a ticker absent from it has target
+  weight 0 and is liquidated. The prod demo labels zero-delta rows `HOLD`
+  (previously mislabelled `BUY`) and the consumer tallies holds.
+- README no longer re-teaches the retired `deduplicated` vocabulary (renamed to
+  `duplicate` in 0.6.0); demo console output prints `(duplicate)`.
+
+### Upgrade notes
+
+- Older SDKs (≤ 0.7.1) surface the new 409 as `PublishFailed` with a DLQ spill;
+  a DLQ resend of that entry will keep answering 409 — purge it and republish
+  under a revision-suffixed id.
+
 ## [0.7.1] - 2026-08-31
 
 No library changes — this release exists to prove the publishing pipeline.

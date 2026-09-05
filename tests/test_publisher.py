@@ -12,6 +12,7 @@ from fake_relay import API_KEY, FakeRelay, SyncASGITransport
 from multiedge_relay import (
     AuthError,
     DiskDLQ,
+    IdempotencyConflict,
     PublishFailed,
     Signal,
     SignalAck,
@@ -78,6 +79,59 @@ def test_duplicate_client_signal_id_returns_the_original_ack(
     assert second.duplicate is True
     assert second.sequence == first.sequence
     assert len(relay.signals["s1"]) == 1
+
+
+def test_changed_payload_under_reused_id_raises_idempotency_conflict(
+    relay: FakeRelay, dlq_root: Path
+) -> None:
+    """ADR 0015: a corrected payload resent under its original id is a loud 409.
+
+    The exception carries the ORIGINAL signal's identity, is never retried, and
+    never spills to the DLQ — resending the same bytes can never succeed, so a
+    DLQ entry would be a forever-409 trap for ``dlq resend``.
+    """
+    with make_publisher(dlq_root, transport=SyncASGITransport(relay.app)) as publisher:
+        first = publisher.publish(
+            Signal(strategy_id="s1", payload={"weight": 0.25}, client_signal_id="s1:2026-09-14")
+        )
+        with pytest.raises(IdempotencyConflict) as excinfo:
+            publisher.publish(
+                Signal(strategy_id="s1", payload={"weight": 0.40}, client_signal_id="s1:2026-09-14")
+            )
+    assert excinfo.value.signal_id == first.signal_id
+    assert excinfo.value.sequence == first.sequence
+    assert ":r2" in str(excinfo.value)
+    assert len(relay.signals["s1"]) == 1, "nothing was published"
+    assert relay.requests.count("POST /v1/signals") == 2, "a conflict is never retried"
+    assert not list(DiskDLQ(root=dlq_root).pending()), "a conflict never spills to the DLQ"
+
+
+def test_other_409_bodies_keep_the_publish_failed_dlq_path(
+    relay: FakeRelay, dlq_root: Path
+) -> None:
+    """A 409 that is NOT client_signal_id_conflict (e.g. strategy_archived) stays
+    an unexpected terminal status: fail fast, spill to the DLQ."""
+    relay.fail_next(1, 409)
+    with (
+        make_publisher(dlq_root, transport=SyncASGITransport(relay.app)) as publisher,
+        pytest.raises(PublishFailed) as excinfo,
+    ):
+        publisher.publish(Signal(strategy_id="s1", payload={"a": 1}))
+    assert excinfo.value.dlq_path is not None
+    assert len(list(DiskDLQ(root=dlq_root).pending())) == 1
+
+
+def test_schema_version_reaches_the_wire(relay: FakeRelay, dlq_root: Path) -> None:
+    """``Signal.schema_version`` must land in the publish body, not be dropped."""
+    with make_publisher(dlq_root, transport=SyncASGITransport(relay.app)) as publisher:
+        publisher.publish(
+            Signal(
+                strategy_id="s1",
+                payload={"a": 1},
+                schema_version="portfolio_rebalance/1.1",
+            )
+        )
+    assert relay.publish_bodies[-1]["schema_version"] == "portfolio_rebalance/1.1"
 
 
 @respx.mock

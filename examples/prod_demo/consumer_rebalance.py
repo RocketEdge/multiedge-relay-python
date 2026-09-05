@@ -61,8 +61,8 @@ def format_signal(signal: ReceivedSignal, meta: SignalMeta) -> str:
             ``[live]``, or ``[gapfill]``.
 
     Returns:
-        A line like ``[live] seq=7 2026-08-27 -> 2026-08-28: 9 position(s) — 5 BUY,
-        4 SELL`` (or ``no action (heartbeat)`` for empty-positions days).
+        A line like ``[live] seq=7 2026-08-27 -> 2026-08-28: 9 position(s) — 4 BUY,
+        3 SELL, 2 HOLD`` (or ``no action (heartbeat)`` for empty-positions days).
     """
     payload = signal.payload
     positions = payload["positions"]
@@ -75,7 +75,8 @@ def format_signal(signal: ReceivedSignal, meta: SignalMeta) -> str:
         return f"{head} no action (heartbeat)"
     buys = sum(1 for p in positions if p["action"] in {"BUY", "INITIALIZE"})
     sells = sum(1 for p in positions if p["action"] == "SELL")
-    return f"{head} {len(positions)} position(s) — {buys} BUY, {sells} SELL"
+    holds = sum(1 for p in positions if p["action"] == "HOLD")
+    return f"{head} {len(positions)} position(s) — {buys} BUY, {sells} SELL, {holds} HOLD"
 
 
 def signals_to_rows(signals: list[ReceivedSignal]) -> list[dict[str, str]]:

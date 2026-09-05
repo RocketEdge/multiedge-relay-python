@@ -39,8 +39,8 @@ SCHEMA_REQUIRED = ("kind", "signal_date", "planned_execution_date", "positions")
 #: Required keys of each entry in ``positions``.
 POSITION_REQUIRED = ("ticker", "action", "signal_portfolio_weight")
 
-#: The schema's ``action`` enum.
-POSITION_ACTIONS = frozenset({"INITIALIZE", "BUY", "SELL"})
+#: The schema's ``action`` enum (portfolio_rebalance/1.1, relay ADR 0015).
+POSITION_ACTIONS = frozenset({"INITIALIZE", "BUY", "SELL", "HOLD"})
 
 
 def shipped_text_files() -> list[Path]:
@@ -118,3 +118,30 @@ def test_minimal_example_payload_matches_the_standard_schema(publish_minimal: An
         assert set(position) == set(POSITION_REQUIRED)
         assert position["action"] in POSITION_ACTIONS
         assert 0 <= position["signal_portfolio_weight"] <= 1
+
+
+def test_readme_teaches_the_correction_convention() -> None:
+    """The README must document corrections (relay ADR 0015).
+
+    A publisher's most natural mistake — resending a corrected payload under
+    the original ``client_signal_id`` — is now a 409; the README has to teach
+    the ``:r2`` revision-suffix convention and the typed ``IdempotencyConflict``
+    so the first person to hit it finds the answer on the project page.
+    """
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert ":r2" in readme, "the revision-suffix convention must be documented"
+    assert "client_signal_id_conflict" in readme, "the 409 error code must be named"
+    assert "IdempotencyConflict" in readme, "the typed exception must be named"
+    assert "HOLD" in readme, "the 1.1 action enum must be documented"
+    assert "liquidat" in readme.lower(), "omission = liquidation must be stated"
+
+
+def test_readme_does_not_teach_the_retired_ack_vocabulary() -> None:
+    """``deduplicated`` was renamed to ``duplicate`` in 0.6.0; prose that keeps
+    re-teaching the retired name undoes the deprecation."""
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    scrubbed = readme.replace("SignalAck.deduplicated is deprecated", "")
+    assert "deduplicated" not in scrubbed, (
+        "README still teaches the retired `deduplicated` vocabulary — "
+        "use `duplicate` (the relay's wire field)"
+    )

@@ -84,6 +84,10 @@ class FakeRelay:
     # (e.g. 404 unknown_endpoint / 409 endpoint_not_active) for fatal-path tests.
     ws_negotiate_bodies: list[dict[str, Any]] = field(default_factory=list)
     ws_negotiate_status: int | None = None
+    # Publish request bodies, verbatim — lets tests assert envelope fields
+    # (e.g. schema_version) actually reach the wire instead of being dropped
+    # by the model.
+    publish_bodies: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self._seq: dict[str, int] = {}
@@ -153,6 +157,7 @@ class FakeRelay:
         @app.post("/v1/signals")
         async def publish(request: Request) -> JSONResponse:
             body = await request.json()
+            self.publish_bodies.append(body)
             strategy_id = body.get("strategy_id")
             payload = body.get("payload")
             if not strategy_id or not isinstance(payload, dict):
@@ -161,6 +166,20 @@ class FakeRelay:
             if client_signal_id:
                 existing = self._by_client_id.get((strategy_id, client_signal_id))
                 if existing is not None:
+                    if existing.payload != payload:
+                        # Mirrors the real relay (ADR 0015): a CHANGED payload
+                        # under a reused id is a mis-sent correction — refuse it
+                        # loudly instead of silently replaying the original ack.
+                        return JSONResponse(
+                            {
+                                "error": "client_signal_id_conflict",
+                                "signal_id": existing.signal_id,
+                                "sequence": existing.sequence,
+                                "hint": "publish the correction under a new "
+                                'client_signal_id, e.g. "<client_signal_id>:r2"',
+                            },
+                            status_code=409,
+                        )
                     return JSONResponse(existing.as_ack(duplicate=True), status_code=200)
             stored = self._store(strategy_id, payload, client_signal_id, body.get("correlation_id"))
             return JSONResponse(stored.as_ack(duplicate=False), status_code=201)
