@@ -37,7 +37,7 @@ from ._retry import (
     is_retryable_status,
 )
 from .dlq import DiskDLQ
-from .exceptions import AuthError, PublishFailed, ValidationRejected
+from .exceptions import AuthError, IdempotencyConflict, PublishFailed, ValidationRejected
 from .models import Signal, SignalAck
 from .ulid import new_ulid
 
@@ -89,6 +89,12 @@ def raise_for_terminal_status(response: httpx.Response) -> None:
     Raises:
         AuthError: On 401/403 — fix the API key; retrying cannot help.
         ValidationRejected: On 422/413 — fix the signal; retrying cannot help.
+        IdempotencyConflict: On 409 ``client_signal_id_conflict`` — the id already
+            names a signal with a different payload (relay ADR 0015); publish the
+            correction under a new id. Never retried, never dead-lettered: the
+            same bytes under the same id can never succeed, so a DLQ entry would
+            be a forever-409 trap for ``dlq resend``. Other 409 bodies (e.g.
+            ``strategy_archived``) fall through to the fail-fast DLQ path.
     """
     if response.status_code in (401, 403):
         raise AuthError(f"relay rejected the API key (HTTP {response.status_code})")
@@ -96,6 +102,17 @@ def raise_for_terminal_status(response: httpx.Response) -> None:
         raise ValidationRejected(
             f"relay rejected the signal (HTTP {response.status_code}): " f"{response.text[:500]}"
         )
+    if response.status_code == 409:
+        try:
+            body = response.json()
+        except ValueError:
+            return
+        if isinstance(body, dict) and body.get("error") == "client_signal_id_conflict":
+            raise IdempotencyConflict(
+                str(body.get("signal_id", "")),
+                int(body.get("sequence", 0)),
+                hint=body.get("hint"),
+            )
 
 
 class SignalPublisher:

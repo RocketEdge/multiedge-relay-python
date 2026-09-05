@@ -120,7 +120,14 @@ def _rebalance_rows(
         signal_weight = _fmt(current.get(ticker, 0.0))
         post_weight = _fmt(new_targets[ticker])
         delta = float(post_weight) - float(signal_weight)
-        action = "SELL" if delta < 0 else "BUY"
+        # portfolio_rebalance/1.1 (relay ADR 0015): an unchanged target is
+        # stated affirmatively as HOLD, never mislabelled as a zero-delta BUY.
+        if delta < 0:
+            action = "SELL"
+        elif delta > 0:
+            action = "BUY"
+        else:
+            action = "HOLD"
         rows.append(
             {
                 "SignalDate": signal_date.isoformat(),

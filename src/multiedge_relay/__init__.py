@@ -5,7 +5,7 @@ full contract: never-silent-loss publishing, at-least-once cursor-based subscrip
 and HMAC-verified webhooks.
 """
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 
 from .cursor import CursorStore, FileCursorStore
 from .dlq import DiskDLQ, DLQEntry, DLQResendReport
@@ -14,6 +14,7 @@ from .exceptions import (
     BufferFullError,
     CursorCorruptError,
     GapUnrecoverableError,
+    IdempotencyConflict,
     MultiEdgeError,
     PublishFailed,
     SignatureVerificationError,
@@ -39,6 +40,7 @@ __all__ = [
     "DiskDLQ",
     "FileCursorStore",
     "GapUnrecoverableError",
+    "IdempotencyConflict",
     "MultiEdgeError",
     "PublishFailed",
     "ReceivedSignal",

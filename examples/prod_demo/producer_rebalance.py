@@ -90,6 +90,7 @@ def load_rebalance_signals(csv_path: Path, strategy_id: str) -> list[Signal]:
             strategy_id=strategy_id,
             payload=by_date[signal_date],
             client_signal_id=f"{strategy_id}:{signal_date}",
+            schema_version="portfolio_rebalance/1.1",
         )
         for signal_date in sorted(by_date)
     ]
@@ -132,7 +133,7 @@ def publish_signals(
         assert isinstance(positions, list)
         log(
             f"{signal.payload['signal_date']}: seq={ack.sequence} "
-            f"positions={len(positions)}" + (" (deduplicated)" if ack.duplicate else "")
+            f"positions={len(positions)}" + (" (duplicate)" if ack.duplicate else "")
         )
     return acks
 
@@ -164,7 +165,7 @@ def main() -> None:
         acks = publish_signals(publisher, signals, pace=args.pace)
 
     duplicates = sum(1 for ack in acks if ack.duplicate)
-    print(f"published {len(acks)} signal(s) ({duplicates} deduplicated by the relay)")
+    print(f"published {len(acks)} signal(s) ({duplicates} duplicate(s) re-acked by the relay)")
 
 
 if __name__ == "__main__":

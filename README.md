@@ -63,14 +63,16 @@ with SignalPublisher(api_key="mesk_your_api_key") as publisher:
     ack = publisher.publish(
         Signal(
             strategy_id="my-strategy",
-            # One signal carries the COMPLETE portfolio for one date.
+            # One signal carries the COMPLETE post-trade portfolio for one date.
+            schema_version="portfolio_rebalance/1.1",
             payload={
                 "kind": "portfolio_rebalance",
                 "signal_date": "2026-08-31",
                 "planned_execution_date": "2026-09-01",
                 "positions": [
-                    {"ticker": "SPY", "action": "BUY", "signal_portfolio_weight": 0.6},
-                    {"ticker": "TLT", "action": "SELL", "signal_portfolio_weight": 0.4},
+                    {"ticker": "SPY", "action": "BUY", "signal_portfolio_weight": 0.5},
+                    {"ticker": "TLT", "action": "SELL", "signal_portfolio_weight": 0.3},
+                    {"ticker": "GLD", "action": "HOLD", "signal_portfolio_weight": 0.2},
                 ],
             },
         )
@@ -78,25 +80,28 @@ with SignalPublisher(api_key="mesk_your_api_key") as publisher:
     print(ack.sequence, ack.signal_id)
 ```
 
-That payload is the relay's shipped `portfolio_rebalance/1.0` schema, which a new feed
+That payload is the relay's shipped `portfolio_rebalance/1.1` schema, which a new feed
 validates against by default — see [Publishing a Whole Portfolio in One
 Signal](#publishing-a-whole-portfolio-in-one-signal) for why the whole book travels in one
 signal, and what the limits are.
 
 ## Publishing a Whole Portfolio in One Signal
 
-**One signal carries one complete portfolio state for one date.** That is why there is no
-batch publish endpoint: the batching lives *inside* the payload, not across requests.
+**One signal carries one complete post-trade portfolio state for one date.** That is why
+there is no batch publish endpoint: the batching lives *inside* the payload, not across
+requests.
 
-The relay ships a first-class schema for exactly this, `portfolio_rebalance/1.0`, and a new
+The relay ships a first-class schema for exactly this, `portfolio_rebalance/1.1`, and a new
 feed validates against it by default:
 
 ```python
 from multiedge_relay import Signal, SignalPublisher
 
 positions = [
-    {"ticker": "SPY", "action": "BUY", "signal_portfolio_weight": 0.60},
-    {"ticker": "TLT", "action": "SELL", "signal_portfolio_weight": 0.40},
+    {"ticker": "SPY", "action": "BUY", "signal_portfolio_weight": 0.50},
+    {"ticker": "TLT", "action": "SELL", "signal_portfolio_weight": 0.30},
+    # Unchanged tickers are stated affirmatively — never omitted:
+    {"ticker": "GLD", "action": "HOLD", "signal_portfolio_weight": 0.20},
 ]
 
 with SignalPublisher(api_key="mesk_your_api_key") as publisher:
@@ -105,6 +110,7 @@ with SignalPublisher(api_key="mesk_your_api_key") as publisher:
             strategy_id="my-strategy",
             # Deterministic: re-running the feed re-acks instead of double-publishing.
             client_signal_id="my-strategy:2026-08-31",
+            schema_version="portfolio_rebalance/1.1",
             payload={
                 "kind": "portfolio_rebalance",
                 "signal_date": "2026-08-31",
@@ -118,15 +124,47 @@ with SignalPublisher(api_key="mesk_your_api_key") as publisher:
 
 The schema is `additionalProperties: false`, so field names are exact: it is
 `signal_portfolio_weight`, not `target_weight`, and `action` is one of `INITIALIZE`, `BUY`,
-`SELL`. Anything else is rejected with `422` as a `ValidationRejected`.
+`SELL`, `HOLD`. Anything else is rejected with `422` as a `ValidationRejected`.
 
+- **The list is the whole book — omission is liquidation.** A ticker absent from a
+  non-empty `positions` list has a target weight of 0 and is **liquidated** by a
+  consumer applying the portfolio. Never send a partial list of "changes only": state
+  every held ticker, using `HOLD` (with its unchanged target weight) for positions that
+  did not trade.
 - **Size.** The payload cap is 64 KB (256 KiB sealed) — roughly 900 positions, so a real
   institutional book fits in one signal. Over the cap the relay answers `413`, which is
   **terminal**: `ValidationRejected` is never retried, so leave headroom.
 - **Empty is meaningful.** `"positions": []` is a valid no-action heartbeat. Publish it —
-  an absent day is indistinguishable from an outage, an empty one is not.
+  an absent day is indistinguishable from an outage, an empty one is not. A heartbeat
+  never trades and never liquidates.
 - **Not a portfolio?** Use whatever JSON your strategy's own registered schema allows; the
   relay carries the payload opaquely.
+
+### Correcting a signal before execution
+
+The relay's ledger is append-only, so a correction is a **new signal**, not an edit:
+publish the full corrected portfolio for the same `signal_date` under a new
+`client_signal_id` with a revision suffix — `"my-strategy:2026-08-31:r2"` (then `:r3`, …).
+The consuming rule is that the **highest sequence for a given `signal_date` is
+authoritative**; since every payload is a complete portfolio, applying the latest one is
+atomic.
+
+Resending a *changed* payload under an already-used id does not work — and since relay
+ADR 0015 it fails loudly instead of silently: the relay answers `409
+client_signal_id_conflict`, which the SDK raises as a typed `IdempotencyConflict` carrying
+the original `signal_id`/`sequence`. It is never retried and never spilled to the DLQ
+(resending the same bytes can never succeed). Byte-identical retries are unaffected: they
+still re-ack `200` with `duplicate=True`.
+
+```python
+from multiedge_relay import IdempotencyConflict
+
+try:
+    ack = publisher.publish(corrected_signal)  # client_signal_id="...:r2"
+except IdempotencyConflict as conflict:
+    # Forgot to bump the revision suffix — the id already names another payload.
+    print(f"id owned by {conflict.signal_id} (seq {conflict.sequence}); bump to :r3")
+```
 
 ### Why not `publish_many`?
 
@@ -594,9 +632,11 @@ poll interval:
   command — it resumes from its persisted cursor and delivers exactly the missed
   signals as `[catchup]`, no loss, no duplicates.
 - **Idempotent republish:** re-run the producer command unchanged. Every ack
-  reports `(deduplicated)` — the deterministic
+  reports `(duplicate)` — the deterministic
   `client_signal_id = "<strategy_id>:<signal_date>"` means the relay returns the
-  original acks instead of storing copies.
+  original acks instead of storing copies. (A *changed* payload under a reused
+  id is refused with `409 client_signal_id_conflict` — corrections use a new
+  id with a `:r2` revision suffix.)
 - **Reconstruction:** `uv run python consumer_rebalance.py --strategy-id 01J...ULID
   --catchup-only --out received.csv` rebuilds the instruction rows from the
   relay's log (the schema carries ticker, action, and pre-trade weight; the two

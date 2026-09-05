@@ -40,7 +40,15 @@ class Signal(BaseModel):
             requests. 64 KB is roughly 900 positions.
         client_signal_id: Publisher-side idempotency key. When ``None``, the
             publisher assigns a ULID before sending, so retries and DLQ resends are
-            deduplicated by the relay.
+            deduplicated by the relay. A CHANGED payload resent under a reused key
+            raises :class:`~multiedge_relay.IdempotencyConflict` (relay ADR 0015) —
+            corrections go out under a new key, conventionally with a revision
+            suffix (``"<strategy>:<date>:r2"``).
+        schema_version: Informational label echoed to subscribers (max 100 chars);
+            the relay validates against the schema registered on the strategy
+            regardless. Convention: the standard schema id, e.g.
+            ``"portfolio_rebalance/1.1"``, so consumers can see which contract the
+            publisher wrote against.
         published_at: Optional publisher-side timestamp (UTC). The relay stamps its
             own authoritative ``accepted_at`` regardless.
         expires_at: Optional advisory expiry; subscribers may drop stale signals.
@@ -52,6 +60,7 @@ class Signal(BaseModel):
     strategy_id: str
     payload: dict[str, Any]
     client_signal_id: str | None = None
+    schema_version: str | None = None
     published_at: datetime | None = None
     expires_at: datetime | None = None
     correlation_id: str | None = None
