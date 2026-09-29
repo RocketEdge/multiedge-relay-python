@@ -87,7 +87,8 @@ def test_rebalance_round_trip(
                 "PlannedExecutionDate": row["PlannedExecutionDate"],
                 "Ticker": row["Ticker"],
                 "Action": row["Action"],
-                "SignalPortfolioWeight": row["SignalPortfolioWeight"],
+                # The wire carries the post-trade target column, not the pre-trade one.
+                "SignalPortfolioWeight": row["ImpliedPostTradeWeightAtSignalClose"],
             }
             for row in csv.DictReader(fh)
         ]
@@ -98,3 +99,15 @@ def test_rebalance_round_trip(
     sub_ex.write_rows(rows, out_csv)
     with out_csv.open(newline="", encoding="utf-8") as fh:
         assert list(csv.DictReader(fh)) == expected
+
+
+def test_loader_publishes_the_post_trade_target_weight(example_modules: tuple[Any, Any]) -> None:
+    """``signal_portfolio_weight`` on the wire is the post-trade target (relay ADR 0015)."""
+    pub_ex, _sub_ex = example_modules
+    signals = pub_ex.load_rebalance_signals(
+        FIXTURES / "synthetic_rebalance.csv", strategy_id="rebalance-demo"
+    )
+    by_date = {s.payload["signal_date"]: s.payload["positions"] for s in signals}
+    targets = {"AAA": pytest.approx(0.40), "BBB": pytest.approx(0.35), "CCC": pytest.approx(0.25)}
+    assert {p["ticker"]: p["signal_portfolio_weight"] for p in by_date["2026-01-05"]} == targets
+    assert {p["ticker"]: p["signal_portfolio_weight"] for p in by_date["2026-01-08"]} == targets

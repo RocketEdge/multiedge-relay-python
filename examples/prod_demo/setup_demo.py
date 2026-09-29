@@ -93,7 +93,7 @@ def run_bootstrap(
         client: An ``httpx.Client`` with ``base_url`` set and the tenant ADMIN key
             in its Authorization header.
         slug: Strategy slug. Omitting ``signal_schema_json`` on create pins the
-            relay's default ``portfolio_rebalance/1.0`` schema.
+            relay's default ``portfolio_rebalance/1.1`` schema.
         display_name: Human-readable strategy name.
         client_name: Display name of the demo subscriber client; an existing
             client with this exact name is reused.

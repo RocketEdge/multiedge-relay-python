@@ -1,6 +1,6 @@
 """Minimal publish example: one signal carrying a whole portfolio, one ack.
 
-The payload follows the relay's shipped standard schema ``portfolio_rebalance/1.0``:
+The payload follows the relay's shipped standard schema ``portfolio_rebalance/1.1``:
 one signal states the COMPLETE portfolio for one signal date. That is the shape the
 relay validates by default, and the reason there is no batch publish endpoint — the
 batching lives inside ``positions``, not across requests.
@@ -18,7 +18,7 @@ from multiedge_relay import Signal, SignalPublisher
 
 
 def rebalance_payload() -> dict[str, Any]:
-    """Build a portfolio_rebalance/1.0 payload: the whole book in one signal.
+    """Build a portfolio_rebalance/1.1 payload: the whole book in one signal.
 
     Contract:
         Matches the relay's standard schema exactly — ``kind``, ``signal_date``,

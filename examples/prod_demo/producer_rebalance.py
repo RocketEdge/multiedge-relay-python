@@ -54,7 +54,9 @@ def load_rebalance_signals(csv_path: Path, strategy_id: str) -> list[Signal]:
     Args:
         csv_path: Path to the instruction CSV (7 columns; see the module docstring
             of ``generate_demo_csv.py``). Only the schema-carried fields — ticker,
-            action, and the pre-trade portfolio weight — are published.
+            action, and the post-trade target weight (the CSV's
+            ``ImpliedPostTradeWeightAtSignalClose``) — are published; the pre-trade
+            weight and the delta are derived columns and are not transported.
         strategy_id: Strategy stream to publish on (the relay's strategy ULID).
 
     Returns:
@@ -82,7 +84,11 @@ def load_rebalance_signals(csv_path: Path, strategy_id: str) -> list[Signal]:
                     {
                         "ticker": row["Ticker"],
                         "action": row["Action"],
-                        "signal_portfolio_weight": float(row["SignalPortfolioWeight"]),
+                        # The wire field is the POST-trade target (relay ADR 0015): the
+                        # CSV's implied post-trade column, never the pre-trade weight.
+                        "signal_portfolio_weight": float(
+                            row["ImpliedPostTradeWeightAtSignalClose"]
+                        ),
                     }
                 )
     return [
