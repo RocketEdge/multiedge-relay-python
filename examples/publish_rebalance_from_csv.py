@@ -33,7 +33,8 @@ def load_rebalance_signals(csv_path: Path, strategy_id: str) -> list[Signal]:
     Returns:
         Signals in ascending SignalDate order. ``PORTFOLIO/NONE`` days produce
         ``positions: []``; trade days produce one position per non-PORTFOLIO row
-        with the ticker, action, and pre-trade portfolio weight.
+        with the ticker, action, and post-trade target weight (the CSV's
+        ``ImpliedPostTradeWeightAtSignalClose`` column).
     """
     by_date: dict[str, dict[str, object]] = {}
     with csv_path.open(newline="", encoding="utf-8") as fh:
@@ -55,7 +56,10 @@ def load_rebalance_signals(csv_path: Path, strategy_id: str) -> list[Signal]:
                     {
                         "ticker": row["Ticker"],
                         "action": row["Action"],
-                        "signal_portfolio_weight": float(row["SignalPortfolioWeight"]),
+                        # The wire field is the POST-trade target (relay ADR 0015).
+                        "signal_portfolio_weight": float(
+                            row["ImpliedPostTradeWeightAtSignalClose"]
+                        ),
                     }
                 )
     return [

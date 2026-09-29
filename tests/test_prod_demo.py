@@ -215,7 +215,15 @@ def test_producer_consumer_round_trip_and_idempotent_rerun(
     consumer.write_rows(rows, out_csv)
 
     with source.open(newline="", encoding="utf-8") as fh:
-        expected = [{key: row[key] for key in consumer.CSV_COLUMNS} for row in csv.DictReader(fh)]
+        # The wire carries the POST-trade target, so the reconstruction shows the
+        # source's implied post-trade column; heartbeat rows stay blank in both.
+        expected = [
+            {
+                **{key: row[key] for key in consumer.CSV_COLUMNS},
+                "SignalPortfolioWeight": row["ImpliedPostTradeWeightAtSignalClose"],
+            }
+            for row in csv.DictReader(fh)
+        ]
     with out_csv.open(newline="", encoding="utf-8") as fh:
         assert list(csv.DictReader(fh)) == expected
 
@@ -380,3 +388,35 @@ def test_demo_script_explains_a_missing_dependency(script: str, blocked: str) ->
     assert sys.executable in message  # names the interpreter actually being used
     # The recommended fix is the documented one: uv builds the environment itself.
     assert f"uv run python {script}" in message
+
+
+def test_loader_publishes_the_post_trade_target_weight(
+    demo_modules: tuple[Any, Any, Any, Any], tmp_path: Path
+) -> None:
+    """The wire weight is the POST-trade target (relay ADR 0015), never the pre-trade column.
+
+    The CSV keeps the feed's real shape (pre-trade weight, delta, implied post-trade
+    weight), but ``signal_portfolio_weight`` is defined as the post-trade target a
+    consumer trades TO. Publishing the pre-trade column sent 0.0 for every INITIALIZE
+    line, so a contract-following consumer would have bought nothing on day one.
+    """
+    gen, _setup, producer, _consumer = demo_modules
+    rows = gen.generate_rows(seed=42, start=date(2024, 1, 2), months=6)
+    source = tmp_path / "demo.csv"
+    gen.write_csv(rows, source)
+
+    signals = producer.load_rebalance_signals(source, strategy_id="01STRATEGYULID")
+    day_one = signals[0].payload["positions"]
+    assert {p["action"] for p in day_one} == {"INITIALIZE"}
+    assert all(p["signal_portfolio_weight"] > 0 for p in day_one)
+    assert abs(sum(p["signal_portfolio_weight"] for p in day_one) - 1.0) < 1e-6
+
+    expected = {
+        (r["SignalDate"], r["Ticker"]): float(r["ImpliedPostTradeWeightAtSignalClose"])
+        for r in rows
+        if r["Ticker"] != "PORTFOLIO"
+    }
+    for signal in signals:
+        for position in signal.payload["positions"]:
+            key = (signal.payload["signal_date"], position["ticker"])
+            assert position["signal_portfolio_weight"] == pytest.approx(expected[key])

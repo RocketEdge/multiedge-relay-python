@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The prod demo and the CSV example published the PRE-trade weight as
+  `signal_portfolio_weight`** — `0.0` on every INITIALIZE line and the drifted
+  current weight on rebalance days — while the contract defines the field as
+  the POST-trade target (relay ADR 0015). A contract-following consumer fed
+  the demo would have bought nothing on day one. The producers now transport
+  the CSV's `ImpliedPostTradeWeightAtSignalClose` column; the CSV shape is
+  unchanged. The demo docs also stop claiming the strategy is pinned to 1.0.
+
 ## [0.8.0] - 2026-09-05
 
 Companion release to the relay's `portfolio_rebalance/1.1` deployment (relay

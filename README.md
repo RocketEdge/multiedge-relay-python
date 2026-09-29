@@ -586,7 +586,7 @@ uv run python setup_demo.py
 ```
 
 This creates strategy `demo-rebalance` (pinned to the relay's default
-`portfolio_rebalance/1.0` schema), a demo subscriber client with a `rest_pull`
+`portfolio_rebalance/1.1` schema), a demo subscriber client with a `rest_pull`
 endpoint and an active entitlement, and mints two keys. **Copy all three values
 now — the keys are shown exactly once:**
 
@@ -639,8 +639,9 @@ poll interval:
   id with a `:r2` revision suffix.)
 - **Reconstruction:** `uv run python consumer_rebalance.py --strategy-id 01J...ULID
   --catchup-only --out received.csv` rebuilds the instruction rows from the
-  relay's log (the schema carries ticker, action, and pre-trade weight; the two
-  derived delta columns are not transported).
+  relay's log (the schema carries ticker, action, and the post-trade target
+  weight — the CSV's `ImpliedPostTradeWeightAtSignalClose`; the pre-trade weight
+  and delta columns are derived and not transported).
 
 Demo state (cursor, DLQ) lives under `examples/prod_demo/.demo/`, not in
 `~/.multiedge/`. To clean up afterwards, revoke the two demo keys in the portal;
