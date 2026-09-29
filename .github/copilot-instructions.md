@@ -24,12 +24,16 @@ is NO API token anywhere; a manual `twine`/`uv publish` is forbidden. See
 [../CONTRIBUTING.md](../CONTRIBUTING.md).
 
 One signal = one COMPLETE portfolio state: `payload` (≤64 KB, 256 KiB sealed; 413 is
-terminal) carries the whole book, as the shipped `portfolio_rebalance/1.0` schema does
+terminal) carries the whole book, as the shipped `portfolio_rebalance/1.1` schema does
 with an unbounded `positions` list for one signal date. There is NO batch publish
 endpoint — `publish_many` is a client-side loop (N requests, N sequences, NOT atomic)
 and must never be documented as a way to send a portfolio, because the cursor commits
 per signal and a split portfolio can be durably half-applied. Receiving mirrors it: one
 signal per message on every transport; `page_size` is transport paging, not a batch API.
+INITIALIZE is a book-opening marker, never a reset (relay ADR 0017): a later INITIALIZE is
+an ordinary rebalance from actual holdings, a re-open is a NEW `signal_date` (never `:r2`
+of the opening date), and going flat is an explicit all-SELL-at-0 book because `[]` is a
+heartbeat.
 
 Model field names mirror the relay's OWN wire names (`SignalAck.duplicate`, not
 `deduplicated`), and `tests/fake_relay.py` must emit those names — a fake speaking the
