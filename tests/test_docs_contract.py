@@ -8,7 +8,7 @@ Purpose:
       keys, so a copy-pasted quickstart is rejected at auth before the reader reaches
       anything the SDK does.
     * An example payload the relay's own standard schema would refuse. A new feed
-      defaults to ``portfolio_rebalance/1.0``, which is ``additionalProperties:
+      defaults to ``portfolio_rebalance/1.1``, which is ``additionalProperties:
       false`` — so a single-ticker payload is a guaranteed 422 against the very feed
       the reader just created.
 
@@ -33,7 +33,7 @@ VALID_KEY_PREFIX = "mesk_"
 #: The prefix that was shipped by mistake — never valid, and rejected at auth.
 INVALID_KEY_PREFIX = "mek_"
 
-#: Required top-level keys of portfolio_rebalance/1.0.
+#: Required top-level keys of portfolio_rebalance/1.1.
 SCHEMA_REQUIRED = ("kind", "signal_date", "planned_execution_date", "positions")
 
 #: Required keys of each entry in ``positions``.
@@ -80,7 +80,7 @@ def publish_minimal() -> Any:
 
 
 def test_no_shipped_sample_uses_a_field_the_standard_schema_rejects() -> None:
-    """No reader-facing sample may name a field `portfolio_rebalance/1.0` refuses.
+    """No reader-facing sample may name a field `portfolio_rebalance/1.1` refuses.
 
     The schema is ``additionalProperties: false``, so `target_weight` is not a
     harmless synonym for `signal_portfolio_weight` — it is a 422. This checks the
@@ -99,7 +99,7 @@ def test_no_shipped_sample_uses_a_field_the_standard_schema_rejects() -> None:
         )
     ]
     assert offenders == [], (
-        "portfolio_rebalance/1.0 is additionalProperties:false — `target_weight` is "
+        "portfolio_rebalance/1.1 is additionalProperties:false — `target_weight` is "
         f"refused with 422, so these samples cannot be copied: {offenders}"
     )
 
@@ -108,7 +108,7 @@ def test_minimal_example_payload_matches_the_standard_schema(publish_minimal: An
     payload = publish_minimal.rebalance_payload()
 
     assert set(SCHEMA_REQUIRED) <= set(payload), (
-        "the minimal example must satisfy portfolio_rebalance/1.0 — a new feed defaults "
+        "the minimal example must satisfy portfolio_rebalance/1.1 — a new feed defaults "
         "to that schema, and additionalProperties:false makes anything else a 422"
     )
     assert payload["kind"] == "portfolio_rebalance"
@@ -134,6 +134,26 @@ def test_readme_teaches_the_correction_convention() -> None:
     assert "IdempotencyConflict" in readme, "the typed exception must be named"
     assert "HOLD" in readme, "the 1.1 action enum must be documented"
     assert "liquidat" in readme.lower(), "omission = liquidation must be stated"
+
+
+def test_readme_teaches_the_initialize_lifecycle() -> None:
+    """The README must define INITIALIZE beyond "day one" (relay ADR 0017).
+
+    A publisher's second most natural question -- "what happens if we send
+    INITIALIZE again?" -- had no answer anywhere. The README has to state that
+    a later INITIALIZE is a book-opening marker and never a reset, that a
+    re-open is a NEW ``signal_date``, that a subscriber refuses a rebalance
+    before its first INITIALIZE, and that going flat is explicit because
+    ``[]`` is a heartbeat.
+    """
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    lowered = readme.lower()
+    assert "INITIALIZE" in readme, "the opening action must be documented"
+    assert "re-open" in lowered, "re-opening a book must be named"
+    assert "never a reset" in lowered, "a later INITIALIZE must be stated as never a reset"
+    assert "before INITIALIZE" in readme, "the refuse-before-INITIALIZE rule must be stated"
+    assert "go flat" in lowered or "liquidate everything" in lowered, "going flat must be named"
+    assert "explicit" in lowered, "going flat must be stated as explicit"
 
 
 def test_readme_does_not_teach_the_retired_ack_vocabulary() -> None:

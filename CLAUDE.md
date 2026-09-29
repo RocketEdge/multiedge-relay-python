@@ -57,14 +57,17 @@ silently diverge from what the tag built. Full procedure in `CONTRIBUTING.md`.
    drift. A fake that speaks the client's dialect only ever confirms the client's
    assumptions.
 4a. **One signal = one COMPLETE portfolio state.** `payload` (≤64 KB, 256 KiB sealed;
-   413 is terminal) carries the whole book — the shipped `portfolio_rebalance/1.0`
+   413 is terminal) carries the whole book — the shipped `portfolio_rebalance/1.1`
    schema is an unbounded `positions` list for one signal date, ~900 positions in the
    cap. There is NO batch publish endpoint: `POST /v1/signals` binds one signal, and
    `publish_many` is a client-side loop — N requests, N sequences, **not atomic**.
    Never document it as a way to send a portfolio: the cursor commits per signal, so a
    split portfolio can be durably half-applied with no completeness marker. Receiving
    mirrors this — every transport delivers one signal per message and `page_size` is
-   transport paging, never a batch-receive API.
+   transport paging, never a batch-receive API. INITIALIZE is a book-opening marker,
+   never a reset (relay ADR 0017): a later INITIALIZE is an ordinary rebalance from
+   actual holdings, a re-open is a NEW `signal_date` (never `:r2` of the opening
+   date), and going flat is an explicit all-SELL-at-0 book because `[]` is a heartbeat.
 5. **Webhook verification**: HMAC-SHA256 over `"{timestamp}." + raw_body` with the
    endpoint secret, `hmac.compare_digest`, reject |now − ts| > 5 min, injectable clock.
    Verify raw received bytes — never re-serialize.

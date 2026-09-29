@@ -166,6 +166,55 @@ except IdempotencyConflict as conflict:
     print(f"id owned by {conflict.signal_id} (seq {conflict.sequence}); bump to :r3")
 ```
 
+### The INITIALIZE lifecycle — a book-opening marker, never a reset
+
+`INITIALIZE` tells a subscriber that this book may open its sleeve; it never means "start
+from zero". Every non-empty book, INITIALIZE included, is reconciled from the subscriber's
+**actual holdings** to the targets (relay ADR 0017):
+
+1. **Open** — the first signal on a feed carries `INITIALIZE` on every line, weights
+   summing to 1.0. The first INITIALIZE book a subscriber executes seeds its sleeve
+   (allocates starting capital); a subscriber must refuse any rebalance received before
+   INITIALIZE rather than apply it to an empty sleeve.
+2. **Steady state** — one signal per trading day: a complete book (`BUY`/`SELL`/`HOLD`)
+   or the heartbeat `[]`.
+3. **Correct** — same `signal_date`, `:r2` id. A correction of the opening book is itself
+   all-INITIALIZE.
+4. **Re-open** — an INITIALIZE book under a **new** `signal_date`: when a new subscriber
+   firm is entitled, when a subscriber reports an unseeded or empty ledger, or when the
+   opening signal went stale. A running subscriber treats it as an ordinary complete
+   rebalance from its holdings — never a reset, nothing re-seeded. Never send it as `:r2`
+   of the opening date; that is a same-date correction, and a stale one.
+5. **Go flat — explicitly** — `[]` is a heartbeat and never liquidates, so an all-cash
+   target is the complete book of every held ticker with `SELL` at `0.0`.
+6. **Close** — archive the strategy only after the flat book has executed.
+
+Subscriber risk policies (turnover caps, kill switches) apply to a re-open like any
+rebalance; a large one may sit queued until the subscriber's operator allows it.
+
+```python
+reopened = Signal(
+    strategy_id="my-strategy",
+    client_signal_id="my-strategy:2026-10-05",   # a NEW date — not "...:2026-08-31:r2"
+    schema_version="portfolio_rebalance/1.1",
+    payload={
+        "kind": "portfolio_rebalance",
+        "signal_date": "2026-10-05",
+        "planned_execution_date": "2026-10-06",
+        "positions": [
+            {"ticker": "SPY", "action": "INITIALIZE", "signal_portfolio_weight": 0.5},
+            {"ticker": "TLT", "action": "INITIALIZE", "signal_portfolio_weight": 0.3},
+            {"ticker": "IEF", "action": "INITIALIZE", "signal_portfolio_weight": 0.2},
+        ],
+    },
+)
+
+# Going flat: every held ticker, SELL at 0.0 — never an empty list.
+flat_positions = [
+    {"ticker": t, "action": "SELL", "signal_portfolio_weight": 0.0} for t in held_tickers
+]
+```
+
 ### Why not `publish_many`?
 
 `publish_many([...])` is a convenience loop, not a batch API — it sends one HTTP request
@@ -221,6 +270,12 @@ def on_signal(signal: ReceivedSignal, meta: SignalMeta) -> None:
     positions = payload["positions"]
     if not positions:
         return  # explicit no-action heartbeat, not a gap
+    # Seed on the first INITIALIZE book; refuse a rebalance before it. A LATER
+    # INITIALIZE re-seeds nothing — it is an ordinary rebalance, never a reset.
+    if not sleeve_is_seeded():
+        if not any(p["action"] == "INITIALIZE" for p in positions):
+            raise RuntimeError("rebalance received before INITIALIZE")
+        seed_sleeve(STARTING_CAPITAL)
     # The whole book arrived together — apply it as ONE unit.
     rebalance_to(
         {p["ticker"]: p["signal_portfolio_weight"] for p in positions},

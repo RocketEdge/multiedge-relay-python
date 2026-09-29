@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **README — the INITIALIZE lifecycle** (relay ADR 0017): `INITIALIZE` is a
+  book-opening marker, never a reset — a later INITIALIZE is an ordinary
+  complete rebalance from the subscriber's actual holdings; a re-open is a
+  NEW `signal_date` (never `:r2` of the opening date); a subscriber refuses a
+  rebalance before its first INITIALIZE; going flat is an explicit
+  all-`SELL`-at-`0.0` book because `[]` is a heartbeat. The subscribe sample
+  shows the seeding guard.
+
 ## [0.8.0] - 2026-09-05
 
 Companion release to the relay's `portfolio_rebalance/1.1` deployment (relay
