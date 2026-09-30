@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-30
+
+Documentation release: the PyPI project page now carries the INITIALIZE lifecycle
+(relay ADR 0017), and the shipped demo publishes the weight the contract defines.
+
 ### Changed
 
 - **README — the INITIALIZE lifecycle** (relay ADR 0017): `INITIALIZE` is a
